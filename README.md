@@ -24,111 +24,338 @@ Current proof points:
 
 ## Architecture
 
+The system is easier to understand as five connected views: how Slack work enters the app, how evidence becomes structured knowledge, how answers are assembled, how Toolhouse is bounded, and how the submission proves itself.
+
+### 1. Slack Intake And Job Loop
+
 ```mermaid
-flowchart TB
-    subgraph Slack[Slack Workspace]
-        Channels[Designated CRE channels\nmessages, threads, files]
-        Questioner[Broker asks @ai-cre-agent]
-        Actions[Show sources / Look deeper]
+%%{init: {"flowchart": {"curve": "basis", "nodeSpacing": 34, "rankSpacing": 46}} }%%
+flowchart LR
+    classDef surface fill:#e8f2ff,stroke:#2563eb,color:#111827
+    classDef app fill:#eef2ff,stroke:#4f46e5,color:#111827
+    classDef jobs fill:#fff7ed,stroke:#ea580c,color:#111827
+    classDef config fill:#f8fafc,stroke:#475569,color:#111827
+
+    subgraph S[Slack workspace]
+        direction TB
+        S1[Designated CRE channels\nmessages, threads, files]
+        S2[Broker asks @ai-cre-agent]
+        S3[Actions\nShow sources + Look deeper]
+        S4[Threaded answer\nshort answer + source links]
     end
 
-    subgraph App[FastAPI Slack Agent]
-        SlackRoutes[Slack event + interactivity routes\nverify, ack, dedupe]
-        Health[Health + dependency endpoints]
-        MCP[CRE Backend MCP endpoint\n/toolhouse/mcp]
+    subgraph A[FastAPI Slack agent]
+        direction TB
+        A1[Slack routes\nverify signature, ack fast, dedupe retries]
+        A2[Slack runtime + gateway\napp_mention, message, file_shared, actions]
+        A3[Health + dependency endpoints\n/live, /ready, /health/deps]
+        A5[Settings + migrations\n.env config, Alembic, SQLAlchemy models]
     end
 
-    subgraph Queue[Postgres-Backed Work Queue]
-        AnswerJobs[answer_query jobs]
-        IngestJobs[ingest message/file jobs]
-        DeeperJobs[look_deeper jobs]
+    subgraph J[Postgres-backed job loop]
+        direction TB
+        J0[(ingestion_jobs\nqueued, running, succeeded, failed)]
+        J1[answer_query]
+        J2[ingest_slack_message / ingest_slack_file]
+        J3[look_deeper]
+        J4[worker lifecycle\nclaim, checkpoint, retry, post/update Slack]
     end
 
-    subgraph Ingestion[Ingestion + Extraction]
-        Backfill[Bounded Slack history backfill\nchannels, threads, files]
-        LiveIngest[Continuous Slack message/file ingestion]
-        Parsers[Native parsers\nPDF, XLSX, CSV, text]
-        OCR[GLM-OCR\nimages + scanned PDFs]
-        Normalize[CRE normalization\naddresses, rent, SF, dates, market]
-    end
+    S1 -->|events + files| A1
+    S2 -->|app mention| A1
+    S3 -->|button payload| A1
+    A1 --> A2
+    A2 --> J0
+    J0 --> J1
+    J0 --> J2
+    J0 --> J3
+    J1 --> J4 --> S4
+    J2 --> J4
+    J3 --> J4
+    S4 --> S3
+    A3 -.checks runtime + dependencies.-> J0
+    A5 -.configures.-> A1
+    A5 -.configures.-> J0
 
-    subgraph Evidence[Postgres Evidence Spine]
-        Sources[(source_documents\nslack_source_posts)]
-        Chunks[(chunks)]
-        Properties[(property_records\nproperty_field_values)]
-        Answers[(queries\nevidence_items\nanswer_snapshots)]
-        AgentRuns[(agent_runs)]
-    end
-
-    subgraph Vector[Hybrid Retrieval Layer]
-        Embed[Local embedding service\nqwen3-embedding]
-        Qdrant[(Qdrant cre_chunks)]
-        Rerank[Local reranker\nqwen3-reranker]
-    end
-
-    subgraph Answering[Answering + Trust Layer]
-        Router[Query router\ninstant, hybrid, data quality, tenant fit]
-        Structured[Structured retrieval\nfilters, proximity, aggregation, conflicts]
-        Hybrid[Chunk retrieval\nkeyword fallback + vector/rerank]
-        Formatter[Slack answer formatter\nshort answer, table, trust receipt]
-        Replay[Replay + eval surface\nexplain-query, replay-query, eval-golden]
-    end
-
-    subgraph Toolhouse[Toolhouse Deeper Review]
-        WorkerAPI[Toolhouse Workers API]
-        Agent[Toolhouse agent]
-        Tools[Backend tools\nexplain evidence, search, aggregate, audit]
-        Validator[Citation validator\nallowed evidence IDs only]
-    end
-
-    Channels -->|events + files| SlackRoutes
-    Questioner -->|app mention| SlackRoutes
-    Actions -->|button payloads| SlackRoutes
-    SlackRoutes --> AnswerJobs
-    SlackRoutes --> IngestJobs
-    SlackRoutes --> DeeperJobs
-    Health --> Evidence
-
-    IngestJobs --> Backfill
-    IngestJobs --> LiveIngest
-    Backfill --> Parsers
-    LiveIngest --> Parsers
-    Parsers --> OCR
-    Parsers --> Normalize
-    OCR --> Normalize
-    Normalize --> Sources
-    Normalize --> Chunks
-    Normalize --> Properties
-    Chunks --> Embed
-    Embed --> Qdrant
-
-    AnswerJobs --> Router
-    Router --> Structured
-    Router --> Hybrid
-    Structured --> Properties
-    Structured --> Sources
-    Hybrid --> Chunks
-    Hybrid --> Qdrant
-    Qdrant --> Rerank
-    Rerank --> Hybrid
-    Structured --> Formatter
-    Hybrid --> Formatter
-    Formatter --> Answers
-    Formatter -->|threaded answer| Channels
-    Answers --> Replay
-
-    DeeperJobs --> WorkerAPI
-    WorkerAPI --> Agent
-    Agent -->|MCP calls| MCP
-    MCP --> Tools
-    Tools --> Sources
-    Tools --> Chunks
-    Tools --> Properties
-    Tools --> Answers
-    Agent --> Validator
-    Validator --> AgentRuns
-    Validator -->|validated deeper answer| Formatter
+    class S1,S2,S3,S4 surface
+    class A1,A2,A3 app
+    class A5 config
+    class J0,J1,J2,J3,J4 jobs
 ```
+
+### 2. Ingestion To Evidence Spine
+
+```mermaid
+%%{init: {"flowchart": {"curve": "basis", "nodeSpacing": 34, "rankSpacing": 46}} }%%
+flowchart LR
+    classDef jobs fill:#fff7ed,stroke:#ea580c,color:#111827
+    classDef ingest fill:#ecfdf5,stroke:#059669,color:#111827
+    classDef store fill:#f8fafc,stroke:#475569,color:#111827
+    classDef vector fill:#f0fdfa,stroke:#0f766e,color:#111827
+
+    subgraph J[Ingestion jobs]
+        direction TB
+        J2[ingest_slack_message / ingest_slack_file]
+        J4[worker lifecycle\nclaim, checkpoint, retry]
+    end
+
+    subgraph I[Ingestion + extraction]
+        direction TB
+        I1[Bounded Slack history backfill\nchannels, threads, files]
+        I2[Continuous live ingestion\nCRE-signal messages + supported files]
+        I3[Demo seeding + sync\npersonas, files, live Slack metadata]
+        I4[Native parsers\nPDF, XLSX, CSV, text]
+        I5[GLM-OCR\nimages + scanned PDFs]
+        I6[CRE fact extraction\naddresses, rent, SF, dates, market]
+    end
+
+    subgraph E[Postgres evidence spine]
+        direction TB
+        E0[(System of record)]
+        E1[source_documents\nslack_source_posts]
+        E2[chunks]
+        E3[property_records\nproperty_field_values]
+        E4[queries\nevidence_items\nanswer_snapshots]
+        E5[slack_events\ningestion_jobs\nagent_runs]
+    end
+
+    subgraph V[Indexable text]
+        direction TB
+        V1[Chunk text ready for retrieval]
+        V2[Canonical CRE facts ready for filters]
+    end
+
+    J2 --> J4
+    J4 --> I1
+    J4 --> I2
+    I3 --> I4
+    I1 --> I4
+    I2 --> I4
+    I4 --> I5
+    I4 --> I6
+    I5 --> I6
+    I6 --> E0
+
+    E0 --- E1
+    E0 --- E2
+    E0 --- E3
+    E0 --- E4
+    E0 --- E5
+    E2 --> V1
+    E3 --> V2
+
+    class J2,J4 jobs
+    class I1,I2,I3,I4,I5,I6 ingest
+    class E0,E1,E2,E3,E4,E5 store
+    class V1,V2 vector
+```
+
+### 3. Retrieval And Answering
+
+```mermaid
+%%{init: {"flowchart": {"curve": "basis", "nodeSpacing": 34, "rankSpacing": 46}} }%%
+flowchart LR
+    classDef jobs fill:#fff7ed,stroke:#ea580c,color:#111827
+    classDef store fill:#f8fafc,stroke:#475569,color:#111827
+    classDef vector fill:#f0fdfa,stroke:#0f766e,color:#111827
+    classDef answer fill:#faf5ff,stroke:#9333ea,color:#111827
+    classDef surface fill:#e8f2ff,stroke:#2563eb,color:#111827
+
+    subgraph J[Answer job]
+        direction TB
+        J1[answer_query]
+    end
+
+    subgraph E[Postgres evidence spine]
+        direction TB
+        E1[source_documents\nslack_source_posts]
+        E2[chunks]
+        E3[property_records\nproperty_field_values]
+        E4[queries\nevidence_items\nanswer_snapshots]
+    end
+
+    subgraph V[Hybrid retrieval services]
+        direction TB
+        V1[Local embedding service\nqwen3-embedding-0_6b-q8_0]
+        V2[(Qdrant\ncre_chunks, 1024-d cosine)]
+        V3[Local reranker\nqwen3-reranker-0.6b]
+        V4[Dependency fallback\nkeyword search when vector path is unavailable]
+    end
+
+    subgraph R[Answering + trust layer]
+        direction TB
+        R1[Query router\ninstant, hybrid, data quality, tenant fit]
+        R2[Structured retrieval\nfilters, proximity, aggregation, source lookup, conflicts]
+        R3[Hybrid chunk retrieval\nkeyword fallback + Qdrant/rerank]
+        R4[Answer formatter\nSlack markdown, table, trust receipt]
+        R5[Replay + eval surface\nexplain-query, replay-query, eval-golden]
+    end
+
+    subgraph S[Slack result]
+        direction TB
+        S4[Threaded answer\nshort answer + source links]
+        S3[Actions\nShow sources + Look deeper]
+    end
+
+    E2 --> V1 --> V2 --> V3
+    J1 --> R1
+    R1 --> R2
+    R1 --> R3
+    R2 --> E1
+    R2 --> E3
+    R3 --> E2
+    R3 --> V2
+    V3 --> R3
+    V4 -.fallback.-> R3
+    R2 --> R4
+    R3 --> R4
+    R4 --> E4
+    E4 --> R5
+    R4 --> S4 --> S3
+
+    class J1 jobs
+    class E1,E2,E3,E4 store
+    class V1,V2,V3,V4 vector
+    class R1,R2,R3,R4,R5 answer
+    class S3,S4 surface
+```
+
+### 4. Toolhouse Trust Boundary
+
+```mermaid
+%%{init: {"flowchart": {"curve": "basis", "nodeSpacing": 34, "rankSpacing": 46}} }%%
+flowchart LR
+    classDef surface fill:#e8f2ff,stroke:#2563eb,color:#111827
+    classDef app fill:#eef2ff,stroke:#4f46e5,color:#111827
+    classDef jobs fill:#fff7ed,stroke:#ea580c,color:#111827
+    classDef store fill:#f8fafc,stroke:#475569,color:#111827
+    classDef answer fill:#faf5ff,stroke:#9333ea,color:#111827
+    classDef toolhouse fill:#fff1f2,stroke:#e11d48,color:#111827
+
+    subgraph S[Slack action]
+        direction TB
+        S3[Look deeper button]
+    end
+
+    subgraph J[Deeper-review job]
+        direction TB
+        J3[look_deeper]
+        J4[worker lifecycle\nclaim, checkpoint, retry, post/update Slack]
+    end
+
+    subgraph A[FastAPI boundary]
+        direction TB
+        A4[CRE Backend MCP\n/toolhouse/mcp + bearer/url-token auth]
+    end
+
+    subgraph T[Toolhouse deeper review]
+        direction TB
+        T1[Toolhouse Workers API]
+        T2[Toolhouse agent]
+        T3[Backend tool surface\nexplain evidence, search, aggregate, nearby, chunks, source detail, audit]
+        T4[Citation validator\nallowed evidence IDs only]
+        T5[Agent run trace\nraw response, parsed payload, validation, fallback]
+    end
+
+    subgraph E[Allowed evidence package]
+        direction TB
+        E1[source_documents\nslack_source_posts]
+        E2[chunks]
+        E3[property_records\nproperty_field_values]
+        E4[queries\nevidence_items\nanswer_snapshots]
+        E5[agent_runs]
+    end
+
+    subgraph R[Validated Slack update]
+        direction TB
+        R4[Answer formatter\nSlack markdown, table, trust receipt]
+    end
+
+    S3 --> J3 --> J4 --> T1 --> T2
+    T2 -->|MCP calls| A4
+    A4 --> T3
+    T3 --> E1
+    T3 --> E2
+    T3 --> E3
+    T3 --> E4
+    T2 --> T4
+    T4 --> T5 --> E5
+    T4 -->|validated deeper answer| R4
+
+    class S3 surface
+    class A4 app
+    class J3,J4 jobs
+    class E1,E2,E3,E4,E5 store
+    class R4 answer
+    class T1,T2,T3,T4,T5 toolhouse
+```
+
+### 5. Reviewer Readiness Loop
+
+```mermaid
+%%{init: {"flowchart": {"curve": "basis", "nodeSpacing": 34, "rankSpacing": 46}} }%%
+flowchart LR
+    classDef ops fill:#fefce8,stroke:#ca8a04,color:#111827
+    classDef app fill:#eef2ff,stroke:#4f46e5,color:#111827
+    classDef store fill:#f8fafc,stroke:#475569,color:#111827
+    classDef answer fill:#faf5ff,stroke:#9333ea,color:#111827
+    classDef jobs fill:#fff7ed,stroke:#ea580c,color:#111827
+
+    subgraph O[Operator + reviewer commands]
+        direction TB
+        O1[CLI / Make targets\nstatus, import, index, recover-demo]
+        O2[Golden evals + demo doctor\nroute, evidence, deps, public callback]
+        O3[Demo dry run + submission report\nrecording prompts, replay IDs, talking points]
+        O4[Secret scan\nsource, docs, config, sample files]
+        O5[Graphify map\n657 nodes, 1134 edges, 50 communities]
+    end
+
+    subgraph A[Runtime checks]
+        direction TB
+        A3[Health + dependency endpoints\n/live, /ready, /health/deps]
+        A5[Settings + migrations\n.env config, Alembic, SQLAlchemy models]
+    end
+
+    subgraph J[State and workers]
+        direction TB
+        J0[(ingestion_jobs\nqueued, running, succeeded, failed)]
+        J4[worker lifecycle\nclaim, checkpoint, retry, post/update Slack]
+    end
+
+    subgraph E[Persisted proof]
+        direction TB
+        E4[queries\nevidence_items\nanswer_snapshots]
+        E5[slack_events\ningestion_jobs\nagent_runs]
+    end
+
+    subgraph R[Inspectable answer surface]
+        direction TB
+        R4[Answer formatter\nSlack markdown, table, trust receipt]
+        R5[Replay + eval surface\nexplain-query, replay-query, eval-golden]
+    end
+
+    O1 --> J0 --> J4
+    O1 --> A3
+    O2 --> A3
+    O2 --> R5
+    O3 --> R4
+    O3 --> R5
+    O4 --> A5
+    O5 --> O2
+    A3 -.reads.-> E5
+    R4 --> E4
+    R5 --> E4
+    E4 --> O3
+    E5 --> O2
+
+    class O1,O2,O3,O4,O5 ops
+    class A3,A5 app
+    class J0,J4 jobs
+    class E4,E5 store
+    class R4,R5 answer
+```
+
+The diagrams preserve the full runtime boundary while keeping each view small enough to scan. Graphify was rebuilt and checked against the code graph before this split, which is why the readiness loop also calls out the CLI, health, settings/migrations, worker lifecycle, Slack gateway, Toolhouse MCP auth, and Graphify proof surface.
 
 The core boundary is intentional: Postgres is the system of record for sources, facts, evidence, jobs, answer snapshots, and agent runs. Toolhouse handles deeper synthesis, but the backend owns retrieval, tool outputs, and citation validation.
 
