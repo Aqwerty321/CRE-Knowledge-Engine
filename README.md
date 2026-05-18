@@ -359,6 +359,273 @@ The diagrams preserve the full runtime boundary while keeping each view small en
 
 The core boundary is intentional: Postgres is the system of record for sources, facts, evidence, jobs, answer snapshots, and agent runs. Toolhouse handles deeper synthesis, but the backend owns retrieval, tool outputs, and citation validation.
 
+## Technical Report: Data And Routing
+
+The implementation is organized around one rule: every visible claim must be traceable to a stored source, a normalized fact, or a persisted evidence item. The important internals live in [app/models/core.py](app/models/core.py), [app/routing](app/routing), [app/retrieval](app/retrieval), [app/answering/query_service.py](app/answering/query_service.py), and [app/toolhouse](app/toolhouse).
+
+### Database Schema
+
+```mermaid
+erDiagram
+    SOURCE_DOCUMENTS ||--o{ SLACK_SOURCE_POSTS : appears_as
+    SOURCE_DOCUMENTS ||--o{ CHUNKS : splits_into
+    SOURCE_DOCUMENTS ||--o{ PROPERTY_RECORDS : extracts
+    CHUNKS ||--o{ PROPERTY_RECORDS : supports
+    PROPERTY_RECORDS ||--o{ PROPERTY_FIELD_VALUES : explains_fields
+    QUERIES ||--o{ EVIDENCE_ITEMS : selects
+    SOURCE_DOCUMENTS ||--o{ EVIDENCE_ITEMS : cites_document
+    CHUNKS ||--o{ EVIDENCE_ITEMS : cites_chunk
+    PROPERTY_RECORDS ||--o{ EVIDENCE_ITEMS : cites_fact
+    QUERIES ||--o{ ANSWER_SNAPSHOTS : snapshots
+    QUERIES ||--o{ AGENT_RUNS : escalates
+    SOURCE_DOCUMENTS ||--o{ INGESTION_JOBS : queues
+
+    SOURCE_DOCUMENTS {
+        uuid id PK
+        string source_type
+        string slack_team_id
+        string slack_channel_id
+        string slack_ts
+        string slack_file_id
+        string file_name
+        text raw_text
+        string content_hash
+        datetime posted_at
+        string status
+    }
+
+    SLACK_SOURCE_POSTS {
+        uuid id PK
+        uuid source_document_id FK
+        string post_key
+        string post_type
+        string slack_channel_id
+        string slack_ts
+        string slack_file_id
+        datetime posted_at
+    }
+
+    CHUNKS {
+        uuid id PK
+        uuid document_id FK
+        int chunk_index
+        text chunk_text
+        int page_number
+        int row_number
+        string section_name
+        string embedding_id
+        json metadata_json
+    }
+
+    PROPERTY_RECORDS {
+        uuid id PK
+        uuid document_id FK
+        uuid chunk_id FK
+        string address
+        string normalized_address
+        string property_type
+        int sq_ft
+        decimal price_per_sq_ft
+        string availability
+        date availability_date
+        string market
+        decimal geo_lat
+        decimal geo_lng
+        decimal source_authority_score
+        decimal freshness_score
+        string duplicate_group_key
+    }
+
+    PROPERTY_FIELD_VALUES {
+        uuid id PK
+        uuid property_record_id FK
+        string field_name
+        text raw_value
+        text normalized_value
+        decimal confidence
+        string method
+        text source_span
+        string extractor_version
+    }
+
+    QUERIES {
+        uuid id PK
+        string slack_channel_id
+        string slack_user_id
+        text query_text
+        string route_mode
+        decimal route_confidence
+        array reason_codes
+        datetime created_at
+    }
+
+    EVIDENCE_ITEMS {
+        uuid id PK
+        uuid query_id FK
+        uuid document_id FK
+        uuid chunk_id FK
+        uuid property_record_id FK
+        decimal relevance_score
+        array matched_fields
+        text source_summary
+    }
+
+    ANSWER_SNAPSHOTS {
+        uuid id PK
+        uuid query_id FK
+        text rendered_answer
+        string route_mode
+        json filters_json
+        array evidence_ids
+        json dependency_state_json
+        json model_versions_json
+    }
+
+    AGENT_RUNS {
+        uuid id PK
+        uuid query_id FK
+        string provider
+        string status
+        string answer_mode
+        json allowed_evidence_ids_json
+        json cited_evidence_ids_json
+        json response_payload_json
+        json validation_json
+        text fallback_reason
+        text rendered_answer
+    }
+
+    SLACK_EVENTS {
+        uuid id PK
+        string slack_event_id
+        string slack_team_id
+        string event_type
+        int retry_num
+        string payload_hash
+        string status
+        datetime received_at
+        datetime processed_at
+    }
+
+    INGESTION_JOBS {
+        uuid id PK
+        string job_type
+        uuid source_document_id FK
+        string status
+        int attempt_count
+        json checkpoint_json
+        text error_message
+        datetime started_at
+        datetime finished_at
+    }
+```
+
+Schema notes that matter in review:
+
+- `source_documents` is the canonical source table. It represents Slack messages, thread replies, PDFs, CSVs, XLSX files, text notes, and OCR-derived documents. It has uniqueness rules for Slack messages and Slack files, plus `content_hash` for repeated file content.
+- `slack_source_posts` records each Slack appearance of a source. A file can be shared again without creating a second canonical document, while still preserving channel, sender, timestamp, and permalink context.
+- `chunks` is the retrieval-ready text layer. Chunks retain page, row, section, embedding ID, and metadata so citations can point back to a row or page instead of a vague document name.
+- `property_records` stores source-level extracted CRE facts, not a prematurely merged global property entity. Probable duplicates are grouped with `duplicate_group_key` and resolved at answer time using authority, freshness, and confidence.
+- `property_field_values` gives field-level auditability: raw value, normalized value, confidence, method, source span, and extractor version.
+- `queries`, `evidence_items`, and `answer_snapshots` form the replayable answer trail. `Show sources`, `explain-query`, `replay-query`, and Toolhouse escalation all read this trail instead of reconstructing the answer from scratch.
+- `agent_runs` stores Toolhouse or local deeper-review traces, including allowed evidence IDs, cited evidence IDs, parsed response payload, validation result, fallback reason, raw response, and rendered answer.
+- `slack_events` and `ingestion_jobs` separate fast Slack acknowledgement from slow work. Slack retries are deduped and recorded, while parsing, indexing, answering, and deeper review run through a Postgres-backed queue.
+
+### Routing Internals
+
+```mermaid
+flowchart LR
+    Q[Slack question] --> P[build_query_plan]
+    P --> S{Route decision}
+    S -->|instant| I[Structured Postgres path]
+    S -->|hybrid| H[Chunk + structured path]
+    S -->|failed| U[Supported-pattern response]
+    I --> E[EvidenceItem rows]
+    H --> E
+    U --> A[AnswerSnapshot]
+    E --> A
+    A --> B[Slack answer blocks\ntrust receipt + actions]
+    B --> D[Show sources]
+    B --> L[Look deeper]
+    L --> T[Toolhouse agent mode\nallowed evidence bundle]
+```
+
+The router is deliberately lightweight and explainable. It produces `route_mode`, `query_type`, `route_confidence`, `reason_codes`, and a filter payload. Hard-coded golden paths handle the demo-critical questions; the generic query constructor expands coverage for property type aliases, known addresses, markets, uploader names, keywords, price and size thresholds, availability windows, aggregation, sorting, limits, missing-data terms, and tenant-fit language.
+
+| Query class | Route | Concrete behavior |
+| --- | --- | --- |
+| Proximity | `instant` | Recognizes seeded anchors like `123 Main Street`, computes Haversine distance from stored coordinates, sorts nearest available properties, and cites the supporting source rows. |
+| Numeric filters | `instant` | Turns prompts like office under `$50/SF` into SQL predicates over `property_type` and `price_per_sq_ft`. |
+| Aggregation | `instant` | Resolves source/uploader references such as John's industrial files, dedupes by `duplicate_group_key`, and sums `sq_ft` in Postgres. |
+| Exact/source lookup | `instant` | Matches normalized address plus field value, then returns the source rows/pages where the value appeared. |
+| Conflict review | `hybrid` | Uses a duplicate group such as Harbor Rd, orders candidates by source authority, freshness, and posting time, then labels evidence as selected, supporting, or superseded. |
+| Loading or yard language | `hybrid` | Searches chunk text for expanded terms like loading dock, shared yard, trailer storage, and yard access; Qdrant/rerank is used when available, keyword fallback otherwise. |
+| Generic structured search | `instant` | Builds a transparent query constructor with conditions, sort, and limit, then returns deduped structured matches. |
+| Tenant fit | `hybrid` | Runs a local heuristic over price, size, availability, source quality, and logistics terms, then invites `Look deeper` for Toolhouse synthesis. |
+| Data quality | `instant` | Scans indexed sources and property rows for missing fields, sources without chunks/properties, and duplicate groups with conflicting numeric facts. |
+| Unsupported | `failed` | Refuses to guess and returns the supported query patterns currently covered. |
+
+An important naming detail: `hybrid` is still backend-owned retrieval, not free-form agent reasoning. The local answer service owns the facts, writes the evidence rows, and records dependency state before Slack sees the response.
+
+### Scoring And Ranking
+
+The ranking rules are intentionally readable enough for a reviewer to audit:
+
+- Structured matches score field coverage plus source quality: matched-field count, `source_authority_score`, `freshness_score`, and extraction confidence. Dedupe keeps the strongest row per `duplicate_group_key`.
+- Sort requests are explicit: cheapest sorts by `price_per_sq_ft`, largest by `sq_ft`, and soonest availability by `availability_date`.
+- Generic structured searches return the top deduped records after filters and sort. Exact lookups can keep multiple rows so source agreement or conflict is visible.
+- Loading-access keyword fallback scores term hits plus authority and freshness. A listing that says both `loading dock` and `yard` outranks one that only says one term, all else equal.
+- Vector retrieval combines Qdrant and rerank scores as `0.35 * vector_score + 0.65 * rerank_score` when rerank is available; otherwise it uses the bounded vector score.
+- Tenant-fit local synthesis scores source quality, near-term availability, price under `$35/SF`, scale above `15,000 SF`, and logistics terms such as loading dock, yard, and trailer storage.
+
+### Missing Values, Conflicts, And No Results
+
+The system treats missing data as product behavior, not an exception path.
+
+- Missing fields stay missing. Renderers say `unknown SF`, `unknown price`, or `availability unknown`; they do not infer values from similar listings.
+- Data-quality questions route to a database report over critical fields: address, property type, square footage, rent, availability, market, coordinates, and source URL.
+- Sources with chunks but no property rows are reported as context-only evidence. They can support source-text search, but they do not become structured facts until extraction produces provenance.
+- No-result structured queries call a relaxed matcher that removes numeric/date blockers and returns closest sourced rows when useful. The answer says which filters were applied and never fabricates a listing.
+- Conflicting duplicate groups are answerable. Harbor Rd, for example, can explain why the fresher 62,000 SF correction outranks an older 58,000 SF inventory row while still citing the superseded source.
+- Field-level provenance lives in `property_field_values`, so a final answer can show not only the normalized value but also the raw value, method, confidence, source span, and extractor version.
+
+### Hybrid Search And Vector Fallbacks
+
+Hybrid search is intentionally conservative. Qdrant helps find fuzzy source text, but Postgres remains the authority for the source, property record, citation, and answer snapshot.
+
+1. Chunk indexing embeds `chunks.chunk_text` with `qwen3-embedding-0_6b-q8_0` and upserts Qdrant points with document ID, source type, file name, Slack channel, posted date, property types, addresses, markets, and text preview.
+2. Hybrid queries embed the query, retrieve Qdrant candidates, join chunk IDs back to Postgres, optionally filter by property type, and rerank with `qwen3-reranker-0.6b`.
+3. If rerank succeeds, the combined score is `0.35 * vector_score + 0.65 * rerank_score`. If rerank fails, vector score is still usable. If Qdrant or embeddings are unavailable, the path returns no vector matches and the caller falls back.
+4. Loading-access search still requires concrete expanded-term hits in the chunk text. A semantic match without the expected source language does not become evidence.
+5. Final hybrid evidence is deduped by `duplicate_group_key`, scored with relevance, authority, and freshness, then persisted exactly like structured evidence.
+6. `dependency_state_json` records whether the answer used Qdrant, rerank, keyword fallback, local synthesis, or disabled dependencies, so replay can explain why the answer looked the way it did.
+
+This is why structured answers keep working with Qdrant down, while source-text questions still become better when the vector stack is available.
+
+### Instant Answer Versus Agent Mode
+
+The default Slack answer path is `instant_answer`, even when route mode is `hybrid`. That path is deterministic: route, retrieve, render, persist evidence, persist snapshot, and post a Slack answer with actions.
+
+Agent mode begins only when the user clicks `Look deeper` or an operator explicitly runs the deeper-review path. The escalation payload is built from `explain-query`: original question, heuristic answer, route mode, reason codes, filters, allowed evidence IDs, evidence bundle, field details, and decision summary.
+
+Toolhouse is allowed to synthesize over that bundle, but it is not allowed to invent the evidence boundary. The backend requires a structured response with status, rendered answer, cited evidence IDs, confidence label, reasoning summary, tools used, unsupported claims dropped, missing data, and suggested follow-ups. The citation validator rejects unsupported evidence IDs and unsupported tool names before anything is posted back to Slack.
+
+The result is a clean split:
+
+- `instant_answer`: fast, local, replayable, good for filters, aggregations, proximity, exact lookup, conflict explanation, and data quality.
+- `hybrid` route mode: still local, but includes chunk search, vector/rerank when available, and source-text evidence.
+- `agent_mode`: Toolhouse-backed deeper review over an allowed evidence package, persisted in `agent_runs`, with backend citation validation and local fallback behavior.
+
+### Notable Architectural Decisions
+
+- Postgres is both evidence spine and queue. For a take-home, that removes operational theater while preserving idempotency, retries, checkpoints, and replay.
+- Source appearances are separate from canonical documents. Slack provenance survives repeated shares without duplicating facts.
+- There is no premature canonical property merge. The system groups likely duplicates at answer time so conflicting facts remain explainable.
+- LLM and Toolhouse work are downstream of retrieval. They can synthesize, compare, and explain; they cannot create trusted facts or bypass allowed evidence IDs.
+- Missingness is visible. The data-quality route and no-result explanations tell the reviewer what the system does not know.
+- Degradation is explicit. Qdrant, rerank, OCR, Toolhouse, and local fallback states are captured in health checks and answer snapshots.
+- The reviewer tooling is part of the architecture: golden evals, replay, demo doctor, dry run, secret scan, submission report, and Graphify map all prove the system is behaving as described.
+
 ## The Slack Experience
 
 A broker can ask:
