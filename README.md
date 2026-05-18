@@ -1,188 +1,240 @@
 # CRE Knowledge Engine
 
-A runnable Slack-native Commercial Real Estate knowledge agent backend. It ingests Slack messages and files, parses native documents and OCR images, normalizes property facts with provenance, retrieves grounded evidence, answers Slack questions with citations, and escalates bounded synthesis to Toolhouse when the instant path needs deeper review.
+CRE Knowledge Engine is a Slack-native AI agent for Commercial Real Estate teams. It turns the messy information brokers already share in Slack - listing flyers, spreadsheets, field notes, corrections, market reports, and tenant requirements - into source-grounded answers inside Slack.
 
-## Current Validation
+The product bet is simple: CRE users do not need another generic chatbot. They need a teammate that can say which property fits, where the fact came from, why one conflicting value won, and whether a deeper Toolhouse review stayed inside the evidence boundary.
 
-- Full regression suite: `uv run pytest -q` passes 81 tests with no known failures or warning noise.
-- Demo preflight: `uv run cre-cli demo-doctor --live-toolhouse` returns `ready`, including golden evals, public callback health, and live Toolhouse validation with no local fallback.
-- Public dependency health: `https://slack.aqwerty321.me/health/deps` reports database, Qdrant, embeddings, rerank, OCR, Slack, Toolhouse, Toolhouse agent, Toolhouse MCP, and background worker configured/healthy.
-- Live Toolhouse smoke: `uv run cre-cli toolhouse-smoke "Find listings that mention loading access or yard space."` completed through Toolhouse with no local fallback and valid evidence citations.
-- Live Slack history sync: `uv run cre-cli sync-slack-history --recent-limit 100 --reindex` scanned 4 configured channels, 32 messages, 4 thread replies, ingested 0 new sources under the current per-channel policies, and preserved the clean 14-source / 14-chunk corpus.
-- OCR smoke: `uv run cre-cli ocr-smoke <image> --source-type image` parsed a real GLM-OCR sample image through the app parser path using `glm_ocr`.
-- Qdrant collection: `cre_chunks`, 14 indexed points, 1024-dimensional cosine vectors.
+## What It Proves
 
-## What It Does
+- Answers precise CRE questions from Slack-visible messages and files with citations.
+- Parses PDFs, XLSX, CSV, text, images, and scanned documents into normalized property facts.
+- Keeps field-level provenance for square footage, rent, availability, market, source rows/pages, Slack sender, channel, and timestamp.
+- Uses deterministic Postgres retrieval for exact facts, filters, proximity, aggregation, and conflict resolution.
+- Uses Qdrant plus local embeddings/reranking for hybrid source-text questions such as loading access or yard space.
+- Exposes `Show sources` and `Look deeper` actions in Slack.
+- Sends bounded Toolhouse synthesis through backend evidence tools, then validates every returned citation before posting.
+- Provides replayable trust receipts for answers, golden evals, demo dry runs, and final submission checks.
 
-- Accepts Slack events quickly, deduplicates retries, and queues background answer or ingestion work only for CRE-signal messages and supported file types, with per-channel ingest policy overrides.
-- Imports CRE source files from the sample manifest and live Slack uploads/messages.
-- Parses PDF, XLSX, CSV, text, images, and scanned PDFs; images/scanned PDFs can use the local GLM-OCR backend.
-- Extracts structured property records with field-level provenance and conservative live-message heuristics.
-- Stores source documents, Slack source-post provenance, chunks, property records, field values, queries, evidence, answer snapshots, agent runs, Slack events, and ingestion jobs in Postgres.
-- Answers deterministic structured questions directly from Postgres when facts are clear.
-- Uses Qdrant plus local embeddings/reranking for hybrid chunk retrieval when evidence text matters.
-- Posts Slack answers with sourced evidence and supports a bounded Toolhouse `Look deeper` path that validates cited evidence IDs before returning to Slack.
+Current proof points:
+
+- `uv run pytest -q` passes 81 tests with no known failures or warning noise.
+- `uv run cre-cli demo-doctor --live-toolhouse` returns `ready`, including public callback health and live Toolhouse validation with no local fallback.
+- `uv run cre-cli demo-dry-run --live-toolhouse` passes the recording query sequence and returns replay commands for each answer.
+- `uv run cre-cli secret-scan` scans source, docs, config, and sample files with 0 findings.
 
 ## Architecture
 
 ```mermaid
-flowchart LR
-    Slack[Slack workspace] -->|events, files, history| FastAPI[FastAPI + Slack routes]
-    FastAPI --> Jobs[Background workers]
-    Jobs --> Ingest[Ingestion + parsers]
-    Ingest --> OCR[GLM-OCR backend]
-    Ingest --> Postgres[(Postgres evidence spine)]
-    Ingest --> Embed[Local embedding service]
-    Embed --> Qdrant[(Qdrant cre_chunks)]
-    FastAPI --> Answer[Query router + answer service]
-    Answer --> Postgres
-    Answer --> Qdrant
-    Answer --> Rerank[Local reranker]
-    Answer --> Slack
-    Toolhouse[Toolhouse agent] -->|MCP tools| FastAPI
-    FastAPI -->|validated citations| Toolhouse
+flowchart TB
+    subgraph Slack[Slack Workspace]
+        Channels[Designated CRE channels\nmessages, threads, files]
+        Questioner[Broker asks @ai-cre-agent]
+        Actions[Show sources / Look deeper]
+    end
+
+    subgraph App[FastAPI Slack Agent]
+        SlackRoutes[Slack event + interactivity routes\nverify, ack, dedupe]
+        Health[Health + dependency endpoints]
+        MCP[CRE Backend MCP endpoint\n/toolhouse/mcp]
+    end
+
+    subgraph Queue[Postgres-Backed Work Queue]
+        AnswerJobs[answer_query jobs]
+        IngestJobs[ingest message/file jobs]
+        DeeperJobs[look_deeper jobs]
+    end
+
+    subgraph Ingestion[Ingestion + Extraction]
+        Backfill[Bounded Slack history backfill\nchannels, threads, files]
+        LiveIngest[Continuous Slack message/file ingestion]
+        Parsers[Native parsers\nPDF, XLSX, CSV, text]
+        OCR[GLM-OCR\nimages + scanned PDFs]
+        Normalize[CRE normalization\naddresses, rent, SF, dates, market]
+    end
+
+    subgraph Evidence[Postgres Evidence Spine]
+        Sources[(source_documents\nslack_source_posts)]
+        Chunks[(chunks)]
+        Properties[(property_records\nproperty_field_values)]
+        Answers[(queries\nevidence_items\nanswer_snapshots)]
+        AgentRuns[(agent_runs)]
+    end
+
+    subgraph Vector[Hybrid Retrieval Layer]
+        Embed[Local embedding service\nqwen3-embedding]
+        Qdrant[(Qdrant cre_chunks)]
+        Rerank[Local reranker\nqwen3-reranker]
+    end
+
+    subgraph Answering[Answering + Trust Layer]
+        Router[Query router\ninstant, hybrid, data quality, tenant fit]
+        Structured[Structured retrieval\nfilters, proximity, aggregation, conflicts]
+        Hybrid[Chunk retrieval\nkeyword fallback + vector/rerank]
+        Formatter[Slack answer formatter\nshort answer, table, trust receipt]
+        Replay[Replay + eval surface\nexplain-query, replay-query, eval-golden]
+    end
+
+    subgraph Toolhouse[Toolhouse Deeper Review]
+        WorkerAPI[Toolhouse Workers API]
+        Agent[Toolhouse agent]
+        Tools[Backend tools\nexplain evidence, search, aggregate, audit]
+        Validator[Citation validator\nallowed evidence IDs only]
+    end
+
+    Channels -->|events + files| SlackRoutes
+    Questioner -->|app mention| SlackRoutes
+    Actions -->|button payloads| SlackRoutes
+    SlackRoutes --> AnswerJobs
+    SlackRoutes --> IngestJobs
+    SlackRoutes --> DeeperJobs
+    Health --> Evidence
+
+    IngestJobs --> Backfill
+    IngestJobs --> LiveIngest
+    Backfill --> Parsers
+    LiveIngest --> Parsers
+    Parsers --> OCR
+    Parsers --> Normalize
+    OCR --> Normalize
+    Normalize --> Sources
+    Normalize --> Chunks
+    Normalize --> Properties
+    Chunks --> Embed
+    Embed --> Qdrant
+
+    AnswerJobs --> Router
+    Router --> Structured
+    Router --> Hybrid
+    Structured --> Properties
+    Structured --> Sources
+    Hybrid --> Chunks
+    Hybrid --> Qdrant
+    Qdrant --> Rerank
+    Rerank --> Hybrid
+    Structured --> Formatter
+    Hybrid --> Formatter
+    Formatter --> Answers
+    Formatter -->|threaded answer| Channels
+    Answers --> Replay
+
+    DeeperJobs --> WorkerAPI
+    WorkerAPI --> Agent
+    Agent -->|MCP calls| MCP
+    MCP --> Tools
+    Tools --> Sources
+    Tools --> Chunks
+    Tools --> Properties
+    Tools --> Answers
+    Agent --> Validator
+    Validator --> AgentRuns
+    Validator -->|validated deeper answer| Formatter
 ```
 
-Core principle: structured facts win when they are available; hybrid retrieval supports source-text questions; Toolhouse is reserved for bounded synthesis and must cite evidence already allowed by the backend.
+The core boundary is intentional: Postgres is the system of record for sources, facts, evidence, jobs, answer snapshots, and agent runs. Toolhouse handles deeper synthesis, but the backend owns retrieval, tool outputs, and citation validation.
 
-## Local Services
+## The Slack Experience
 
-The full demo path expects these local services:
+A broker can ask:
 
-| Service | Default endpoint | Purpose |
-| --- | --- | --- |
-| FastAPI app | `http://127.0.0.1:8020` | Slack routes, health, Toolhouse MCP |
-| Public tunnel | `https://slack.aqwerty321.me` | Slack and Toolhouse callback surface |
-| Postgres | `postgresql+asyncpg://...` | Structured facts, evidence, jobs |
-| Qdrant | `http://localhost:6333` | Vector chunk index, collection `cre_chunks` |
-| Embeddings | `http://127.0.0.1:8001/v1/embeddings` | `qwen3-embedding-0_6b-q8_0`, 1024 dims |
-| Rerank | `http://127.0.0.1:8002/v1/rerank` | `qwen3-reranker-0.6b` |
-| GLM-OCR | `http://127.0.0.1:5003` | Image and scanned-document OCR |
+| Slack prompt | What the agent demonstrates |
+| --- | --- |
+| `What properties do we have available near 123 Main Street?` | Proximity search over normalized property records with sourced nearby results. |
+| `Show office buildings under $50/sq ft.` | Exact structured filtering that excludes higher-priced office inventory. |
+| `Find listings that mention loading access or yard space.` | Hybrid retrieval over source text and field notes, with keyword fallback and Qdrant/rerank support. |
+| `Why did you use 62k sq ft for Harbor Rd?` | Freshness and authority conflict handling with selected, supporting, and superseded evidence. |
+| `Look deeper` | Toolhouse-backed synthesis over the allowed evidence bundle, with backend citation validation. |
 
-Start Qdrant locally when needed:
+Every factual answer includes a compact trust receipt: route label, evidence count, reason for selection, and source boundary. `Show sources` opens the evidence trail. `replay-query` reconstructs the stored answer snapshot outside Slack.
 
-```bash
-docker compose up -d qdrant
-```
+## Why It Is Credible
 
-The current `.env` on this workstation enables vector search, vector indexing on import, Slack ingestion channels, Toolhouse credentials, and OCR. Use `.env.example` as the non-secret template.
+CRE data is full of small, expensive contradictions: one spreadsheet says 58,000 SF, a later correction says 62,000 SF, and a Slack thread explains which source to trust. This project treats those details as the product, not as prompt decoration.
 
-Slack ingest policy and retention controls:
+The implementation favors boring reliability where facts matter:
 
-- `CRE_SLACK_INGEST_CHANNEL_POLICIES_RAW` supports `channel_id=policy` entries separated by commas.
-- Supported policies are `evidence`, `files_only`, `listings_only`, and `disabled`.
-- `CRE_SLACK_CONTEXT_RETENTION_DAYS` prunes old live Slack message context with no structured property rows.
-- `CRE_SLACK_DOWNLOAD_RETENTION_DAYS` releases old downloaded Slack files from disk after parsing/indexing.
-- `CRE_SLACK_STORAGE_PRUNE_INTERVAL_SECONDS` controls automatic background pruning cadence; set `0` to disable the periodic worker-side prune.
+- Slack is acknowledged quickly; slow parsing, indexing, answering, and Toolhouse calls run through background jobs.
+- Live ingestion is conservative so generic chatter does not become source truth.
+- Source appearances are modeled separately from canonical documents, so repeated Slack shares keep provenance without duplicating facts.
+- Golden evals verify routes, expected addresses, source labels, reason codes, evidence order, and dependency state.
+- Agent runs persist Toolhouse/local deeper-review traces, raw responses, parsed payloads, citation validation, fallback state, and rendered output.
 
-## Runbook
+## Try It Locally
 
-Install and validate:
+This repo uses Python 3.12 and `uv`.
 
 ```bash
 uv sync
-uv run pytest -q
-uv run cre-cli status
-```
-
-Recover the local demo stack after a reboot:
-
-```bash
 make recover-demo
-```
-
-That recovery path starts Postgres and Qdrant via Docker, restores the FastAPI app on `8020`, starts GLM-OCR from its own backend directory so it reads the correct `.env`, and reconnects the named `cloudflared` tunnel when the public callback URL is down. Local logs and pid files are written under `.runtime/`.
-
-Import local samples and build the vector index:
-
-```bash
 uv run cre-cli import-samples
 uv run cre-cli index-chunks --reset
-uv run cre-cli audit-data
-```
-
-Run the API locally:
-
-```bash
-uv run uvicorn app.main:app --host 0.0.0.0 --port 8020 --reload --no-access-log
-```
-
-Run the reviewer-facing eval and preflight surface:
-
-```bash
-uv run cre-cli eval-golden
 uv run cre-cli demo-doctor --skip-public-callback
-uv run cre-cli demo-dry-run --skip-public-callback
-uv run cre-cli secret-scan
-uv run cre-cli submission-report --skip-public-callback --format markdown --output .runtime/submission-report.md
+```
+
+Ask a local question:
+
+```bash
+uv run cre-cli ask "Show office buildings under $50/sq ft."
+```
+
+Replay the resulting answer:
+
+```bash
 uv run cre-cli replay-query <query-id>
 ```
 
-`eval-golden` reruns built-in golden questions and validates route mode, expected addresses, source labels, reason codes, snapshot evidence ID ordering, and dependency state. `demo-doctor` combines corpus counts, local dependency health, ingestion audit readiness, golden evals, and Toolhouse config into one preflight result. `demo-dry-run` executes the recording prompt sequence and returns query IDs plus replay commands. `secret-scan` checks source/docs/config/sample files while excluding local env/runtime artifacts. `submission-report` packages readiness checks, dry-run steps, deliverables, and follow-up talking points into a final report. `replay-query` prints the stored answer snapshot, evidence bundle, model/dependency state, replay checks, and any saved agent-run traces for a query.
-
-Exercise live Slack ingestion and reindexing:
+Run the final readiness path:
 
 ```bash
-uv run cre-cli sync-slack-history --recent-limit 100 --reindex
-uv run cre-cli prune-slack-storage --reindex
+make demo-check
+make submission-report
 ```
 
-Smoke OCR through the parser path:
+For the live Slack demo, the current workstation path uses:
+
+- FastAPI app: `http://127.0.0.1:8020`
+- Public callback: `https://slack.aqwerty321.me`
+- Qdrant collection: `cre_chunks`
+- Embeddings: `qwen3-embedding-0_6b-q8_0`
+- Rerank: `qwen3-reranker-0.6b`
+- OCR: GLM-OCR at `http://127.0.0.1:5003`
+- Toolhouse Agent ID: `0c2c4555-5d96-47e4-8e05-f956de7a102e`
+
+Use `.env.example` as the non-secret template. Local `.env` values are intentionally excluded from the source secret scan.
+
+## Reviewer Commands
 
 ```bash
-uv run cre-cli ocr-smoke /path/to/image.png --source-type image
+uv run pytest -q
+uv run cre-cli eval-golden
+uv run cre-cli demo-doctor --live-toolhouse
+uv run cre-cli demo-dry-run --live-toolhouse
+uv run cre-cli secret-scan
+uv run cre-cli submission-report --format markdown --output .runtime/submission-report.md
 ```
 
-Smoke the live Toolhouse path:
+## Project Shape
 
-```bash
-uv run cre-cli toolhouse-smoke "Find listings that mention loading access or yard space."
-```
+- [app/main.py](app/main.py) creates the FastAPI app and worker lifecycle.
+- [app/slack/](app/slack) owns Slack intake, answer rendering, source actions, and demo seeding.
+- [app/ingestion/](app/ingestion) handles sample import, Slack backfill, live ingestion, source provenance, and quality checks.
+- [app/extraction/](app/extraction) parses native files and routes image/scanned-document OCR.
+- [app/retrieval/](app/retrieval) and [app/routing/](app/routing) implement structured, hybrid, tenant-fit, and data-quality retrieval.
+- [app/answering/query_service.py](app/answering/query_service.py) writes queries, evidence items, answer snapshots, and explanation payloads.
+- [app/toolhouse/](app/toolhouse) contains the Workers API client, bounded local fallback, MCP server, backend tools, and citation validator.
+- [app/evaluation/](app/evaluation) provides golden evals, replay, demo doctor, demo dry run, secret scan, and submission report generation.
+- [tests/](tests) covers golden answers, Slack loop behavior, ingestion, parsers, Toolhouse tools/client/MCP, and readiness commands.
 
-## Golden Queries
+## Submission Notes
 
-| Query | Expected behavior |
-| --- | --- |
-| `Show office listings under $40/SF.` | Structured Postgres answer with office listings and citations. |
-| `Find listings that mention loading access or yard space.` | Hybrid Qdrant/rerank retrieval; latest smoke returns `130 Elm Ave` and `64 Union Yard` only. |
-| `What changed for Harbor Rd?` | Hybrid conflict explanation showing current, supporting, and superseded evidence. |
-| `Why is Harbor listed as 62k SF?` | Explains the selected source-of-truth correction and cites evidence. |
-| `Which properties fit John's industrial requirement?` | Tenant-fit synthesis over structured fields with missing-data notes where needed. |
-| `Look deeper` from Slack | Toolhouse bounded review using backend evidence tools and validated citation IDs. |
+- Demo video script: [docs/slack-demo-video-script.md](docs/slack-demo-video-script.md)
+- Demo runbook: [docs/slack-demo-runbook.md](docs/slack-demo-runbook.md)
+- Sample data and evaluation plan: [docs/sample-data-and-evaluation.md](docs/sample-data-and-evaluation.md)
+- Production practices and trade-offs: [docs/production-practices.md](docs/production-practices.md)
+- Toolhouse readiness checkpoint: [docs/toolhouse-readiness-checkpoint.md](docs/toolhouse-readiness-checkpoint.md)
+- Generated submission report: [.runtime/submission-report.md](.runtime/submission-report.md)
 
-## Important Trust Boundaries
+Hardest part: keeping Slack ingestion, document extraction, retrieval, citations, Slack actions, and Toolhouse synthesis aligned around replayable evidence IDs.
 
-- Slack events are acknowledged quickly and processed by background jobs.
-- Slack retries are deduplicated by team and event ID.
-- Source chunks, property fields, and Slack source-post rows retain provenance back to Slack messages/files or sample documents, including repeated file shares across channels.
-- Golden eval and replay commands validate that answer snapshot evidence IDs still resolve to the exact stored evidence order shown to the user.
-- Live Slack ingestion is intentionally conservative: generic channel chatter is ignored, unsupported file types are skipped, address-only chatter does not become a structured property record, and per-channel policy can force `files_only`, `listings_only`, or `disabled` ingestion.
-- Toolhouse cannot invent citations; returned evidence IDs are validated against the backend allowlist before Slack posting.
-- Vector search is optional and has keyword fallback, but the demo environment currently has Qdrant, embeddings, and rerank healthy.
+Main trade-off: I chose a deterministic evidence spine and Postgres-backed jobs over adding orchestration frameworks for show. The result is less flashy internally, but more defensible in a CRE workflow where exact rent, square footage, availability, and source provenance matter.
 
-## Project Map
-
-- [app/main.py](app/main.py) - FastAPI app creation and background worker lifecycle.
-- [app/api/routes/slack.py](app/api/routes/slack.py) - Slack event and interactivity endpoints.
-- [app/slack/service.py](app/slack/service.py) - Slack answer rendering and source actions.
-- [app/ingestion/sample_importer.py](app/ingestion/sample_importer.py) - Manifest/live-source import, structured extraction, and indexing hooks.
-- [app/ingestion/slack_ingestor.py](app/ingestion/slack_ingestor.py) - Live Slack message/file ingestion and bounded history backfill.
-- [app/extraction/parsers.py](app/extraction/parsers.py) - Native parsers and OCR routing.
-- [app/indexing/vector_service.py](app/indexing/vector_service.py) - Embedding, Qdrant indexing/search, and rerank integration.
-- [app/answering/query_service.py](app/answering/query_service.py) - Query routing, evidence selection, answers, and explanations.
-- [app/evaluation/golden.py](app/evaluation/golden.py) - Golden evals, query replay payloads, and demo-doctor checks.
-- [app/evaluation/submission.py](app/evaluation/submission.py) - Secret scanning and final submission report generation.
-- [app/toolhouse/tools.py](app/toolhouse/tools.py) - Backend tools exposed to Toolhouse/MCP.
-- [tests/](tests/) - Golden, Slack, Toolhouse, parser, and CLI coverage.
-
-## Deeper Docs
-
-- [problem-statement/Take Home Assigment.txt](problem-statement/Take%20Home%20Assigment.txt) - original assignment text.
-- [docs/assignment-brief.md](docs/assignment-brief.md) - cleaned brief, acceptance criteria, and constraints.
-- [docs/final-implementation-spec.md](docs/final-implementation-spec.md) - implementation architecture and MVP scope.
-- [docs/slack-toolhouse-integration.md](docs/slack-toolhouse-integration.md) - Slack, Toolhouse, event, file, and backfill plan.
-- [docs/cre-data-dictionary.md](docs/cre-data-dictionary.md) - canonical schema, normalization, and provenance model.
-- [docs/retrieval-routing-spec.md](docs/retrieval-routing-spec.md) - query routing, retrieval, ranking, and citation behavior.
-- [docs/sample-data-and-evaluation.md](docs/sample-data-and-evaluation.md) - sample data manifest, golden queries, and demo checks.
-- [docs/production-practices.md](docs/production-practices.md) - production-quality guardrails, trust invariants, operator runbooks, and demo checklist.
-- [docs/toolhouse-readiness-checkpoint.md](docs/toolhouse-readiness-checkpoint.md) - readiness state, query-constructor behavior, local `Look deeper`, and Toolhouse handoff plan.
+With two more weeks: add production OAuth and multi-workspace permissions, admin review UI for low-confidence extraction, object storage for files, telemetry dashboards, external geocoding and drive-time search, retrieval benchmark snapshots, and retention/deletion workflows for Slack-originated data.
