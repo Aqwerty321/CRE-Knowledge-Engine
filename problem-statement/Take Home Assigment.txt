@@ -1,0 +1,42 @@
+﻿Take home assignment: the Agent that knows it all
+Your first take-home assignment is to build a working prototype of a Slack AI Agent that helps a Commercial Real Estate (CRE) team quickly find property information shared in Slack.
+Typical CRE team(s) constantly shares property listings, data sheets, market reports, availability updates, and supporting files (PDFs, CSVs, Excel files, images) across multiple Slack channels. Right now, team members waste time manually scrolling or searching to answer simple questions like:
+“What properties do we have available near 123 Main Street?”
+“Show me any office buildings under $50/sq ft that were mentioned last month.”
+“What’s the total square footage of industrial properties in the file John posted yesterday?”
+Your AI agent will act like a knowledgeable teammate: it reads all messages and attachments, indexes them intelligently, and answers natural-language questions with accurate, sourced answers.
+Goal
+Build on Toolhouse a Slack agent that:
+* Continuously ingests every message and file in designated channels (including historical data).
+* Understands and parses attachments (PDFs, CSVs, Excel, text files).
+* Uses AI to answer property-related questions with context from Slack data.
+Example expected behavior:
+      * User: @ai-cre-agent What properties do we have available near 123 Main Street?
+      * Agent: “We have two matching properties: • 120 Main St. Class A Office, 4,800 sq ft, $42/sq ft, available Q3 2026 (from PDF posted by Sarah 2 days ago) • 130 Elm Ave – 0.3 miles away, Industrial, … [View original file]”
+Deliverables (Submit as a single GitHub repo)
+1. You can build this completely in Toolhouse but you might need to add extra MCPs or integrations, please therefore include your codebase with clear folder structure.
+2. README.md that includes:
+   * Setup & run 
+   * List of sample test queries and expected behavior.
+   * Architecture diagram (simple draw.io or mermaid is fine).
+3. A video showing a Demo in Slack where a user can:
+   * Uploading new or using old sample property files to Slack.
+   * Asking different questions to the AI agent.
+   * The bot answering correctly with sources.
+4. Be ready to answer question in the follow-up call:
+   * What was the hardest part?
+   * What would you change if you had two more weeks?
+   * Any trade-offs you made?
+Sample Data 
+You will need 8–10 realistic sample files (you can find these on Google or make them up with ChatGPT):
+* 3–4 PDFs with property details (different addresses).
+* 2 CSVs with property inventories (columns: address, type, sq_ft, price_per_sqft, availability).
+* A few text messages mentioning properties.
+Time Allowed
+7 days (Submit on May 20th 2026)
+We care more about clean, thoughtful implementation and a working prototype than a perfect production system.
+Questions?
+Feel free to message me on Discord anytime during the week. We want you to succeed and learn.
+Good luck! We’re excited to see what you build! 
+Submission
+On May 20th, reply to this email with your GitHub repo link + demo video

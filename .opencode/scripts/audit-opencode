@@ -1,0 +1,88 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+start_path="${1:-$PWD}"
+
+if git -C "$start_path" rev-parse --show-toplevel >/dev/null 2>&1; then
+  repo_root="$(git -C "$start_path" rev-parse --show-toplevel)"
+else
+  repo_root="$(realpath "$start_path")"
+fi
+
+status_ok=0
+
+check_file() {
+  local path="$1"
+  if [[ -e "$path" ]]; then
+    print "OK   $path"
+  else
+    print "MISS $path"
+    status_ok=1
+  fi
+}
+
+check_file "$repo_root/AGENTS.md"
+check_file "$repo_root/GRAPHIFY_NOTES.md"
+check_file "$repo_root/opencode.json"
+check_file "$repo_root/docs/opencode/mcp-workflows.md"
+check_file "$repo_root/docs/opencode/runtime-notes.md"
+check_file "$repo_root/.opencode/skills/mcp-research/SKILL.md"
+check_file "$repo_root/.opencode/skills/repo-triage/SKILL.md"
+check_file "$repo_root/.opencode/agents/mcp-orchestrator.md"
+check_file "$repo_root/.opencode/agents/mcp-researcher.md"
+check_file "$repo_root/.opencode/agents/repo-surgeon.md"
+check_file "$repo_root/.opencode/commands/refresh-graph.md"
+check_file "$repo_root/.opencode/commands/mcp-audit.md"
+check_file "$repo_root/.opencode/commands/repo-research.md"
+check_file "$repo_root/.opencode/commands/graph-report.md"
+check_file "$repo_root/.opencode/commands/graph-query.md"
+check_file "$repo_root/.opencode/commands/graph-path.md"
+check_file "$repo_root/.opencode/plugins/graphify.js"
+check_file "$repo_root/.opencode/scripts/build-graphify"
+check_file "$repo_root/.opencode/scripts/audit-opencode"
+check_file "$repo_root/.opencode/scripts/graphify_repo_overlay.py"
+
+python3 - "$repo_root" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+repo_root = Path(sys.argv[1])
+config_path = repo_root / "opencode.json"
+
+if not config_path.exists():
+    raise SystemExit(0)
+
+config = json.loads(config_path.read_text())
+instructions = config.get("instructions", [])
+required = {
+    "./docs/opencode/mcp-workflows.md",
+    "./docs/opencode/runtime-notes.md",
+}
+
+missing = sorted(required.difference(instructions))
+if missing:
+    print("MISS instructions:")
+    for item in missing:
+        print(f"  - {item}")
+
+plugins = config.get("plugin", [])
+if ".opencode/plugins/graphify.js" not in plugins:
+    print("MISS plugin registration: .opencode/plugins/graphify.js")
+
+graph = config.get("mcp", {}).get("graphify-local")
+if graph:
+    cmd = graph.get("command", [])
+    print("INFO graphify-local configured:")
+    print("  " + " ".join(cmd))
+else:
+    print("INFO graphify-local not configured in opencode.json")
+PY
+
+if [[ $status_ok -eq 0 ]]; then
+  print "Audit complete: scaffold files present."
+else
+  print "Audit complete: missing files detected."
+fi
+
+exit $status_ok

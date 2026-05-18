@@ -1,0 +1,167 @@
+{
+  "task": "look_deeper",
+  "query_id": "11111111-1111-4111-8111-111111111111",
+  "original_query": "Which industrial options over 30k SF under $25/SF look strongest for a logistics tenant?",
+  "heuristic_result": "Best local shortlist for that tenant fit:\n1. 88 Foundry Ln - 44,000 SF at $21.50/SF; under $35/SF, usable scale, available soon. Source: industrial-availability.csv (row 2; Priya; #cre-listings; 2026-05-13)\n2. 700 Logistics Pkwy - 58,000 SF at $24.00/SF; under $35/SF, usable scale, logistics language in source. Source: broker-availability-tracker.txt (John; #cre-listings; 2026-05-15)",
+  "route_mode": "hybrid",
+  "reason_codes": [
+    "heuristic_router",
+    "local_synthesis",
+    "property_type_detected",
+    "subjective_intent",
+    "sq_ft_lower_bound",
+    "price_upper_bound",
+    "keyword_terms"
+  ],
+  "filters": {
+    "intent": "tenant_fit",
+    "property_types": ["industrial"],
+    "address_terms": [],
+    "uploader_names": [],
+    "markets": [],
+    "keywords": ["loading dock", "logistics", "yard"],
+    "price_per_sq_ft_lt": "25",
+    "price_per_sq_ft_gt": null,
+    "sq_ft_gte": 30000,
+    "sq_ft_lte": null,
+    "availability_before": "2026-08-31",
+    "require_immediate": false,
+    "aggregate": null,
+    "aggregate_field": null,
+    "sort": "tenant_fit",
+    "limit": 5,
+    "tenant_profile": "logistics",
+    "query_constructor": {
+      "base_table": "property_records",
+      "joins": ["source_documents", "chunks"],
+      "conditions": [
+        {"field": "property_records.property_type", "op": "in", "value": ["industrial"]},
+        {"field": "property_records.price_per_sq_ft", "op": "<", "value": "25"},
+        {"field": "property_records.sq_ft", "op": ">=", "value": 30000},
+        {"field": "property_records.availability_date", "op": "<=", "value": "2026-08-31"}
+      ],
+      "sort": ["tenant_fit", "source_authority_score desc", "freshness_score desc"],
+      "limit": 5
+    }
+  },
+  "allowed_evidence_ids": [
+    "22222222-2222-4222-8222-222222222222",
+    "33333333-3333-4333-8333-333333333333"
+  ],
+  "evidence": [
+    {
+      "evidence_id": "22222222-2222-4222-8222-222222222222",
+      "relevance_score": "0.9700",
+      "matched_fields": ["property_type", "sq_ft", "price_per_sq_ft", "availability_date", "loading dock", "yard"],
+      "source_summary": "industrial-availability.csv (row 2; Priya; #cre-listings; 2026-05-13)",
+      "source_document": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "source_type": "csv",
+        "file_name": "industrial-availability.csv",
+        "source_url": "https://demo.local/files/industrial-availability.csv",
+        "local_path": "files/industrial-availability.csv",
+        "slack_user_name": "Priya",
+        "slack_channel_name": "cre-listings",
+        "slack_ts": "1715590800.000100",
+        "posted_at": "2026-05-13T09:00:00+00:00"
+      },
+      "property_record": {
+        "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "address": "88 Foundry Ln",
+        "normalized_address": "88 foundry ln",
+        "property_type": "industrial",
+        "sq_ft": 44000,
+        "price_per_sq_ft": "21.50",
+        "availability": "Q2 2026",
+        "availability_date": "2026-04-01",
+        "market": "Harbor District",
+        "source_page": null,
+        "source_row": 2,
+        "source_authority_score": "0.9700",
+        "freshness_score": "0.8400",
+        "duplicate_group_key": "88 foundry ln|industrial"
+      },
+      "chunk": {
+        "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "chunk_index": 0,
+        "page_number": null,
+        "row_number": 2,
+        "section_name": "Rows 2-4",
+        "text_preview": "88 Foundry Ln, industrial, 44,000 SF, $21.50/SF, Q2 2026 availability, loading dock and yard notes."
+      },
+      "field_details": [
+        {
+          "field_name": "sq_ft",
+          "raw_value": "44,000 SF",
+          "normalized_value": "44000",
+          "confidence": "1.0000",
+          "method": "manual_seed",
+          "source_span": "Row 2 size cell",
+          "extractor_version": "sample-seed-v1"
+        }
+      ],
+      "evidence_role": "selected",
+      "selection_reason": "Local tenant-fit heuristic scored price, size, availability, source quality, and logistics terms."
+    },
+    {
+      "evidence_id": "33333333-3333-4333-8333-333333333333",
+      "relevance_score": "0.9300",
+      "matched_fields": ["property_type", "sq_ft", "price_per_sq_ft", "logistics"],
+      "source_summary": "broker-availability-tracker.txt (John; #cre-listings; 2026-05-15)",
+      "source_document": {
+        "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "source_type": "text",
+        "file_name": "broker-availability-tracker.txt",
+        "source_url": "https://demo.local/files/broker-availability-tracker.txt",
+        "local_path": "files/broker-availability-tracker.txt",
+        "slack_user_name": "John",
+        "slack_channel_name": "cre-listings",
+        "slack_ts": "1715781600.000100",
+        "posted_at": "2026-05-15T14:00:00+00:00"
+      },
+      "property_record": {
+        "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        "address": "700 Logistics Pkwy",
+        "normalized_address": "700 logistics pkwy",
+        "property_type": "industrial",
+        "sq_ft": 58000,
+        "price_per_sq_ft": "24.00",
+        "availability": "Q3 2026",
+        "availability_date": "2026-09-01",
+        "market": "Logistics Belt",
+        "source_page": null,
+        "source_row": null,
+        "source_authority_score": "0.8800",
+        "freshness_score": "0.9100",
+        "duplicate_group_key": "700 logistics pkwy|industrial"
+      },
+      "chunk": {
+        "id": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+        "chunk_index": 0,
+        "page_number": null,
+        "row_number": null,
+        "section_name": "Broker notes",
+        "text_preview": "700 Logistics Pkwy offers 58,000 SF industrial availability at $24/SF with logistics tenant language."
+      },
+      "field_details": [],
+      "evidence_role": "candidate",
+      "selection_reason": "Candidate matched industrial scale, pricing, and logistics wording but has later availability."
+    }
+  ],
+  "decision_summary": {
+    "selected_addresses": ["88 Foundry Ln", "700 Logistics Pkwy"],
+    "selection_reason": "Local tenant-fit heuristic before Toolhouse escalation.",
+    "retrieval_mode": "structured_tenant_fit",
+    "query_constructor": {
+      "base_table": "property_records",
+      "conditions": ["industrial", "sq_ft >= 30000", "price_per_sq_ft < 25"]
+    }
+  },
+  "slack_context": {
+    "channel": "C0B476USV7X",
+    "thread_ts": "1715782000.000200",
+    "message_ts": "1715782001.000300",
+    "user_label": "demo-user"
+  },
+  "instructions": "Use CRE Backend MCP first. Return only the JSON object required by the CRE MCP Look Deeper Analyst output contract. Do not post to Slack."
+}

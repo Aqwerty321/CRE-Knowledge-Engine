@@ -1,0 +1,104 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+start_path="${1:-$PWD}"
+
+if git -C "$start_path" rev-parse --show-toplevel >/dev/null 2>&1; then
+  repo_root="$(git -C "$start_path" rev-parse --show-toplevel)"
+else
+  repo_root="$(realpath "$start_path")"
+fi
+
+graphify_python="/home/Aaditya/venvs/graphify/bin/python"
+graphify_version="$($graphify_python -m pip show graphifyy 2>/dev/null | python3 -c 'import sys; text=sys.stdin.read().splitlines(); print(next((line.split(": ",1)[1] for line in text if line.startswith("Version: ")), "unknown"))')"
+
+if [[ ! -x "$graphify_python" ]]; then
+  print "Graphify runtime not found at $graphify_python" >&2
+  exit 1
+fi
+
+REPO_ROOT="$repo_root" "$graphify_python" -c "import os; from pathlib import Path; from graphify.watch import _rebuild_code; _rebuild_code(Path(os.environ['REPO_ROOT']))"
+
+"$graphify_python" "$repo_root/.opencode/scripts/graphify_repo_overlay.py" "$repo_root"
+
+python3 - "$repo_root" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+repo_root = Path(sys.argv[1])
+config_path = repo_root / "opencode.json"
+graph_path = repo_root / "graphify-out" / "graph.json"
+
+if not graph_path.exists():
+    raise SystemExit("Graphify build finished without graphify-out/graph.json")
+
+config = {}
+if config_path.exists():
+    try:
+        config = json.loads(config_path.read_text())
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"Existing opencode.json is not strict JSON: {exc}")
+
+instructions = config.setdefault("instructions", [])
+for item in ["./docs/opencode/mcp-workflows.md", "./docs/opencode/runtime-notes.md"]:
+    if item not in instructions:
+        instructions.append(item)
+
+plugins = config.setdefault("plugin", [])
+plugin_path = ".opencode/plugins/graphify.js"
+if plugin_path not in plugins:
+    plugins.append(plugin_path)
+
+mcp = config.setdefault("mcp", {})
+mcp["graphify-local"] = {
+    "type": "local",
+    "enabled": True,
+    "command": [
+        "/home/Aaditya/venvs/graphify/bin/python",
+        "-m",
+        "graphify.serve",
+        str(graph_path),
+    ],
+    "environment": {},
+}
+
+config_path.write_text(json.dumps(config, indent=2) + "\n")
+PY
+
+python3 - "$repo_root" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+repo_root = Path(sys.argv[1])
+vscode_dir = repo_root / ".vscode"
+vscode_dir.mkdir(parents=True, exist_ok=True)
+vscode_mcp_path = vscode_dir / "mcp.json"
+
+config = {"servers": {}}
+if vscode_mcp_path.exists():
+    try:
+        config = json.loads(vscode_mcp_path.read_text())
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"Existing .vscode/mcp.json is not strict JSON: {exc}")
+
+servers = config.setdefault("servers", {})
+servers["graphifyLocal"] = {
+    "type": "stdio",
+    "command": "/home/Aaditya/venvs/graphify/bin/python",
+    "args": [
+        "-m",
+        "graphify.serve",
+        "${workspaceFolder}/graphify-out/graph.json",
+    ],
+}
+
+vscode_mcp_path.write_text(json.dumps(config, indent=2) + "\n")
+PY
+
+print "Built Graphify artifacts in $repo_root/graphify-out"
+print "Graphify runtime version: $graphify_version"
+print "Updated $repo_root/opencode.json with graphify-local"
+print "Updated $repo_root/.vscode/mcp.json with graphifyLocal"
+print "Refreshed graph report, HTML view, and wiki index"

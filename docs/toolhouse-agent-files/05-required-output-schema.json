@@ -1,0 +1,215 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cre-knowledge-engine.local/schemas/toolhouse-look-deeper-output.schema.json",
+  "title": "CRE MCP Look Deeper Analyst Output",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "rendered_answer",
+    "cited_evidence_ids",
+    "confidence_label",
+    "reasoning_summary",
+    "mcp_tools_used",
+    "toolhouse_integrations_used",
+    "slack_tools_used",
+    "external_sources_consulted",
+    "unsupported_claims_dropped",
+    "missing_data",
+    "suggested_followups"
+  ],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "answered",
+        "needs_more_evidence",
+        "mcp_unavailable",
+        "validation_risk",
+        "tool_error",
+        "external_context_only"
+      ],
+      "description": "Overall worker result. Use answered only when MCP evidence supports the answer."
+    },
+    "rendered_answer": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Slack-ready mrkdwn answer text. Keep concise. Prefer a short bold heading or takeaway, concise bullets when useful, and a short italic caveat only when needed."
+    },
+    "cited_evidence_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "uniqueItems": true,
+      "description": "Only evidence IDs returned by CRE Backend MCP in this run."
+    },
+    "confidence_label": {
+      "type": "string",
+      "enum": ["high", "medium", "low"]
+    },
+    "reasoning_summary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Brief operator-facing grounding summary. Do not include hidden chain-of-thought."
+    },
+    "mcp_tools_used": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "explain_evidence",
+          "explain_query",
+          "search_properties",
+          "get_source_detail",
+          "aggregate_properties",
+          "search_source_chunks",
+          "nearby_properties",
+          "audit_data"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "toolhouse_integrations_used": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "Agent Files",
+          "Code Interpreter",
+          "Virtual Computer",
+          "Semantic Memory Search",
+          "Memory (remember)",
+          "Memory Store",
+          "Web Search",
+          "Newswire",
+          "Current News Search",
+          "Metascraper",
+          "Scraping",
+          "File Download",
+          "Document Parser",
+          "Vision",
+          "Describe Image",
+          "Page Screenshot",
+          "Slack Read Only",
+          "Slackbot Read Only"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "slack_tools_used": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Read-only Slack or Slackbot tool names only. Empty array is preferred when backend context is enough."
+    },
+    "external_sources_consulted": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "url", "role"],
+        "properties": {
+          "title": {"type": "string"},
+          "url": {"type": "string"},
+          "role": {
+            "type": "string",
+            "enum": ["external_context_only", "document_inspection", "diagnostic"]
+          }
+        }
+      }
+    },
+    "unsupported_claims_dropped": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Claims considered but excluded because MCP evidence did not support them."
+    },
+    "missing_data": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Specific missing source, field, permission, tool, or evidence gap."
+    },
+    "suggested_followups": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Useful next questions or data actions. Keep short."
+    },
+    "comparison_table": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["columns", "rows"],
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Optional short label for a compact comparison table."
+        },
+        "columns": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 5,
+          "items": {"type": "string"}
+        },
+        "rows": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 5,
+          "items": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 5,
+            "items": {"type": "string"}
+          }
+        }
+      },
+      "description": "Optional compact table for 2 to 5 property comparisons. Prefer concise cells such as Addr, SF, Rent, Avail, or Dist."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"status": {"const": "answered"}},
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "cited_evidence_ids": {"minItems": 1},
+          "mcp_tools_used": {"minItems": 1}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"status": {"const": "mcp_unavailable"}},
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "cited_evidence_ids": {"maxItems": 0}
+        }
+      }
+    }
+  ],
+  "examples": [
+    {
+      "status": "answered",
+      "rendered_answer": "*Deeper read*\n- 88 Foundry Ln is the strongest supported fit.\n- 700 Logistics Pkwy is a viable backup with later availability.",
+      "comparison_table": {
+        "title": "Quick comparison",
+        "columns": ["Addr", "SF", "Rent", "Avail"],
+        "rows": [["88 Foundry Ln", "44,000 SF", "$21.50/SF", "Q2 2026"], ["700 Logistics Pkwy", "120,000 SF", "$12.75/SF", "Q4 2026"]]
+      },
+      "cited_evidence_ids": ["22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"],
+      "confidence_label": "high",
+      "reasoning_summary": "Grounded in explain_evidence and structured property records. Compared price, size, availability, and source quality.",
+      "mcp_tools_used": ["explain_evidence", "search_properties"],
+      "toolhouse_integrations_used": ["Agent Files"],
+      "slack_tools_used": [],
+      "external_sources_consulted": [],
+      "unsupported_claims_dropped": [],
+      "missing_data": [],
+      "suggested_followups": ["Ask for nearby alternatives if the tenant can accept later availability."]
+    }
+  ]
+}

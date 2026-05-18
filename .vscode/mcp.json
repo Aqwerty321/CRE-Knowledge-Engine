@@ -1,0 +1,18 @@
+{
+  "servers": {
+    "Toolhouse": {
+      "url": "https://docs.toolhouse.ai/toolhouse/~gitbook/mcp",
+      "type": "http"
+    },
+    "graphifyLocal": {
+      "type": "stdio",
+      "command": "/home/Aaditya/venvs/graphify/bin/python",
+      "args": [
+        "-m",
+        "graphify.serve",
+        "${workspaceFolder}/graphify-out/graph.json"
+      ]
+    }
+  },
+  "inputs": []
+}

@@ -1,0 +1,401 @@
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+from uuid import UUID
+
+import pytest
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import delete, select
+from sqlalchemy.exc import SQLAlchemyError
+
+from app.answering.query_service import answer_query, explain_query
+from app.db.session import SessionFactory, engine
+from app.evaluation import replay_query, run_golden_evals
+from app.ingestion.sample_importer import import_sample_data
+from app.models import AnswerSnapshot, EvidenceItem, Query
+
+
+def _ensure_schema() -> None:
+    command.upgrade(Config("alembic.ini"), "head")
+
+
+async def _prepare_query_database() -> None:
+    await import_sample_data(Path("sample-data"))
+    async with SessionFactory() as session:
+        async with session.begin():
+            await session.execute(delete(AnswerSnapshot))
+            await session.execute(delete(EvidenceItem))
+            await session.execute(delete(Query))
+
+
+async def _load_query_artifacts(query_id: str) -> tuple[Query, list[EvidenceItem], AnswerSnapshot | None]:
+    async with SessionFactory() as session:
+        query_record = await session.get(Query, UUID(query_id))
+        assert query_record is not None
+        evidence_result = await session.execute(select(EvidenceItem).where(EvidenceItem.query_id == query_record.id))
+        snapshot = await session.scalar(select(AnswerSnapshot).where(AnswerSnapshot.query_id == query_record.id))
+        return query_record, list(evidence_result.scalars()), snapshot
+
+
+@pytest.fixture
+def async_runner() -> asyncio.Runner:
+    with asyncio.Runner() as runner:
+        yield runner
+        runner.run(engine.dispose())
+
+
+@pytest.fixture
+def prepared_query_db(async_runner: asyncio.Runner) -> None:
+    try:
+        _ensure_schema()
+        async_runner.run(_prepare_query_database())
+    except (OSError, SQLAlchemyError) as exc:
+        pytest.skip(f"Postgres not available for golden answer tests: {exc}")
+
+
+@pytest.mark.golden
+def test_proximity_query_returns_ranked_cited_results(prepared_query_db: None, async_runner: asyncio.Runner) -> None:
+    payload = async_runner.run(answer_query("What properties do we have available near 123 Main Street?"))
+
+    assert payload["status"] == "answered"
+    assert payload["route_mode"] == "instant"
+    assert payload["matched_addresses"][:2] == ["120 Main St", "130 Elm Ave"]
+    assert payload["evidence_count"] == 3
+    assert "main-street-office-flyer.pdf" in payload["rendered_answer"]
+    assert "elm-ave-industrial-flyer.pdf" in payload["rendered_answer"]
+
+    query_record, evidence_items, snapshot = async_runner.run(_load_query_artifacts(payload["query_id"]))
+
+    assert query_record.route_mode == "instant"
+    assert len(evidence_items) == payload["evidence_count"]
+    assert all(item.source_summary for item in evidence_items)
+    assert snapshot is not None
+    assert snapshot.route_mode == "instant"
+    assert len(snapshot.evidence_ids) == payload["evidence_count"]
+
+
+@pytest.mark.golden
+def test_office_threshold_query_excludes_high_price_listing(
+    prepared_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = async_runner.run(answer_query("Show office buildings under $50/sq ft."))
+
+    assert payload["status"] == "answered"
+    assert payload["matched_addresses"] == ["120 Main St", "17 Pine St"]
+    assert "900 North Loop" not in payload["rendered_answer"]
+    assert payload["evidence_count"] == 2
+
+    query_record, evidence_items, snapshot = async_runner.run(_load_query_artifacts(payload["query_id"]))
+
+    assert "numeric_filter" in query_record.reason_codes
+    assert len(evidence_items) == 2
+    assert snapshot is not None
+    assert snapshot.filters_json["price_per_sq_ft_lt"] == "50"
+
+
+@pytest.mark.golden
+def test_john_industrial_aggregation_sums_deduped_sources(
+    prepared_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = async_runner.run(answer_query("What is the total square footage of industrial properties in John's file or notes?"))
+
+    assert payload["status"] == "answered"
+    assert payload["matched_addresses"] == ["130 Elm Ave", "64 Union Yard"]
+    assert "49,500 SF" in payload["rendered_answer"]
+    assert payload["evidence_count"] == 2
+
+    query_record, evidence_items, snapshot = async_runner.run(_load_query_artifacts(payload["query_id"]))
+
+    assert "aggregation" in query_record.reason_codes
+    assert len(evidence_items) == 2
+    assert snapshot is not None
+    assert snapshot.filters_json["slack_user_name"] == "John"
+
+
+@pytest.mark.golden
+def test_source_lookup_query_returns_file_and_slack_citations(
+    prepared_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = async_runner.run(answer_query("Where did the $42/SF number for 120 Main come from?"))
+
+    assert payload["status"] == "answered"
+    assert payload["matched_addresses"] == ["120 Main St"]
+    assert payload["evidence_count"] == 2
+    assert any("main-street-office-flyer.pdf" in citation for citation in payload["citations"])
+    assert any("Slack message" in citation for citation in payload["citations"])
+
+    query_record, evidence_items, snapshot = async_runner.run(_load_query_artifacts(payload["query_id"]))
+
+    assert "source_lookup" in query_record.reason_codes
+    assert len(evidence_items) == 2
+    assert snapshot is not None
+    assert snapshot.route_mode == "instant"
+
+
+@pytest.mark.golden
+def test_explain_query_returns_replayable_trust_receipt(
+    prepared_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    answer_payload = async_runner.run(answer_query("Show office buildings under $50/sq ft."))
+
+    explain_payload = async_runner.run(explain_query(answer_payload["query_id"]))
+
+    assert explain_payload["status"] == "explained"
+    assert explain_payload["query_id"] == answer_payload["query_id"]
+    assert explain_payload["route_mode"] == "instant"
+    assert "numeric_filter" in explain_payload["reason_codes"]
+    assert explain_payload["answer_snapshot"]["filters"]["price_per_sq_ft_lt"] == "50"
+    assert explain_payload["answer_snapshot"]["rendered_answer"] == answer_payload["rendered_answer"]
+    assert explain_payload["answer_snapshot"]["dependency_state"]["qdrant"] is False
+    assert explain_payload["evidence_count"] == 2
+    assert len(explain_payload["evidence"]) == 2
+
+    first_evidence = explain_payload["evidence"][0]
+    assert first_evidence["source_summary"]
+    assert first_evidence["source_document"]["file_name"] == "main-street-office-flyer.pdf"
+    assert first_evidence["property_record"]["address"] == "120 Main St"
+    assert first_evidence["field_details"]
+    assert any(detail["field_name"] == "price_per_sq_ft" for detail in first_evidence["field_details"])
+
+
+@pytest.mark.golden
+def test_eval_golden_validates_expected_sources_and_evidence_order(
+    prepared_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = async_runner.run(run_golden_evals(case_names=["office_threshold", "harbor_conflict"]))
+
+    assert payload["status"] == "passed"
+    assert payload["case_count"] == 2
+    assert payload["failed_count"] == 0
+
+    office_case = next(case for case in payload["cases"] if case["name"] == "office_threshold")
+    assert office_case["evidence_ids"]
+    assert office_case["matched_addresses"] == ["120 Main St", "17 Pine St"]
+    assert "main-street-office-flyer.pdf" in office_case["source_labels"]
+
+    harbor_case = next(case for case in payload["cases"] if case["name"] == "harbor_conflict")
+    assert harbor_case["route_mode"] == "hybrid"
+    assert harbor_case["source_labels"] == ["source-corrections.csv", "Slack message", "industrial-availability.csv"]
+
+
+@pytest.mark.golden
+def test_replay_query_projects_snapshot_evidence_and_checks(
+    prepared_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    answer_payload = async_runner.run(answer_query("Show office buildings under $50/sq ft."))
+
+    replay_payload = async_runner.run(replay_query(answer_payload["query_id"]))
+
+    assert replay_payload["status"] == "replayed"
+    assert replay_payload["query_text"] == "Show office buildings under $50/sq ft."
+    assert replay_payload["rendered_answer"] == answer_payload["rendered_answer"]
+    assert replay_payload["replay_checks"]["snapshot_evidence_ids_match_explain_order"] is True
+    assert replay_payload["replay_checks"]["missing_source_document_evidence_ids"] == []
+    assert replay_payload["replay_checks"]["field_detail_count"] >= 2
+    assert replay_payload["agent_runs"] == []
+
+
+@pytest.mark.golden
+def test_explain_query_handles_unknown_query_id(prepared_query_db: None, async_runner: asyncio.Runner) -> None:
+    explain_payload = async_runner.run(explain_query("00000000-0000-0000-0000-000000000000"))
+
+    assert explain_payload["status"] == "not_found"
+    assert explain_payload["message"] == "No stored query exists for that ID."
+
+
+@pytest.mark.golden
+def test_harbor_change_query_returns_hybrid_conflict_answer(
+    prepared_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = async_runner.run(answer_query("Did anything change for Harbor Rd yesterday?"))
+
+    assert payload["status"] == "answered"
+    assert payload["route_mode"] == "hybrid"
+    assert payload["matched_addresses"] == ["240 Harbor Rd"]
+    assert payload["evidence_count"] == 3
+    assert "62,000 SF" in payload["rendered_answer"]
+    assert "58,000 SF" in payload["rendered_answer"]
+    assert "source-corrections.csv" in payload["rendered_answer"]
+    assert "industrial-availability.csv" in payload["rendered_answer"]
+
+    query_record, evidence_items, snapshot = async_runner.run(_load_query_artifacts(payload["query_id"]))
+
+    assert query_record.route_mode == "hybrid"
+    assert "change_detection" in query_record.reason_codes
+    assert len(evidence_items) == 3
+    assert snapshot is not None
+    assert snapshot.dependency_state_json["keyword_fallback"] is True
+    assert snapshot.dependency_state_json["retrieval_mode"] == "keyword_conflict_review"
+
+
+@pytest.mark.golden
+def test_harbor_why_query_explain_shows_selected_and_superseded_evidence(
+    prepared_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    answer_payload = async_runner.run(answer_query("Why did you use 62k sq ft for Harbor Rd?"))
+
+    assert answer_payload["status"] == "answered"
+    assert answer_payload["route_mode"] == "hybrid"
+    assert answer_payload["evidence_count"] == 3
+    assert "freshness" in answer_payload["rendered_answer"]
+
+    explain_payload = async_runner.run(explain_query(answer_payload["query_id"]))
+
+    assert explain_payload["status"] == "explained"
+    assert explain_payload["route_mode"] == "hybrid"
+    assert explain_payload["answer_snapshot"]["dependency_state"]["keyword_fallback"] is True
+    assert explain_payload["decision_summary"]["selected_sq_ft"] == 62000
+    assert explain_payload["decision_summary"]["superseded_sq_ft"] == [58000]
+    assert "freshest correction" in explain_payload["decision_summary"]["selection_reason"]
+
+    evidence_roles = [item["evidence_role"] for item in explain_payload["evidence"]]
+    assert evidence_roles == ["selected", "supporting", "superseded"]
+    assert explain_payload["evidence"][0]["source_document"]["file_name"] == "source-corrections.csv"
+    assert explain_payload["evidence"][1]["source_document"]["source_type"] == "slack_message"
+    assert explain_payload["evidence"][2]["source_document"]["file_name"] == "industrial-availability.csv"
+    assert explain_payload["evidence"][2]["selection_reason"] == "older conflicting value outranked by fresher correction evidence"
+
+
+@pytest.mark.golden
+def test_loading_access_query_returns_hybrid_keyword_results(
+    prepared_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = async_runner.run(answer_query("Find listings that mention loading access or yard space."))
+
+    assert payload["status"] == "answered"
+    assert payload["route_mode"] == "hybrid"
+    assert payload["matched_addresses"] == ["130 Elm Ave", "64 Union Yard"]
+    assert payload["evidence_count"] == 2
+    assert "loading dock" in payload["rendered_answer"]
+    assert "yard" in payload["rendered_answer"]
+
+    query_record, evidence_items, snapshot = async_runner.run(_load_query_artifacts(payload["query_id"]))
+
+    assert query_record.route_mode == "hybrid"
+    assert "chunk_keyword_search" in query_record.reason_codes
+    assert len(evidence_items) == 2
+    assert snapshot is not None
+    assert snapshot.dependency_state_json["keyword_fallback"] is True
+    assert snapshot.dependency_state_json["retrieval_mode"] == "keyword_chunk_search"
+
+
+@pytest.mark.golden
+def test_loading_access_explain_query_shows_keyword_chunk_matches(
+    prepared_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    answer_payload = async_runner.run(answer_query("Find listings that mention loading access or yard space."))
+
+    explain_payload = async_runner.run(explain_query(answer_payload["query_id"]))
+
+    assert explain_payload["status"] == "explained"
+    assert explain_payload["route_mode"] == "hybrid"
+    assert explain_payload["answer_snapshot"]["dependency_state"]["keyword_fallback"] is True
+    assert explain_payload["decision_summary"]["retrieval_mode"] == "keyword_chunk_search"
+    assert explain_payload["decision_summary"]["selected_addresses"] == ["130 Elm Ave", "64 Union Yard"]
+    assert "loading access or yard space" in explain_payload["decision_summary"]["selection_reason"]
+
+    first_evidence = explain_payload["evidence"][0]
+    assert first_evidence["evidence_role"] == "result"
+    assert first_evidence["source_document"]["file_name"] == "elm-ave-industrial-flyer.pdf"
+    assert "loading dock" in first_evidence["selection_reason"]
+    assert "yard access" in first_evidence["selection_reason"]
+    assert "loading dock" in first_evidence["chunk"]["text_preview"]
+
+
+@pytest.mark.golden
+def test_generic_structured_query_constructor_handles_numeric_filters(
+    prepared_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = async_runner.run(answer_query("Show industrial listings over 30k SF under $25/SF."))
+
+    assert payload["status"] == "answered"
+    assert payload["route_mode"] == "instant"
+    assert "structured_property_search" in payload["reason_codes"]
+    assert "query_constructor" in payload["filters"]
+    assert {"240 Harbor Rd", "700 Logistics Pkwy", "88 Foundry Ln"}.issubset(set(payload["matched_addresses"]))
+    assert "Direct match" in payload["rendered_answer"]
+    assert payload["comparison_table"] is not None
+    assert payload["comparison_table"]["columns"] == ["Addr", "SF", "Rent", "Avail"]
+    assert len(payload["comparison_table"]["rows"]) >= 2
+
+    explain_payload = async_runner.run(explain_query(payload["query_id"]))
+
+    assert explain_payload["status"] == "explained"
+    assert explain_payload["decision_summary"]["query_constructor"]["base_table"] == "property_records"
+    assert any(condition["field"] == "property_records.sq_ft" for condition in explain_payload["decision_summary"]["query_constructor"]["conditions"])
+
+
+@pytest.mark.golden
+def test_generic_exact_lookup_returns_property_profile(
+    prepared_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = async_runner.run(answer_query("What do we know about 700 Logistics Pkwy?"))
+
+    assert payload["status"] == "answered"
+    assert payload["route_mode"] == "instant"
+    assert payload["matched_addresses"] == ["700 Logistics Pkwy"]
+    assert "120,000 SF" in payload["rendered_answer"]
+    assert "broker-availability-tracker.xlsx" in payload["rendered_answer"]
+    assert payload["comparison_table"] is None
+
+
+@pytest.mark.golden
+def test_no_results_answer_explains_filters_and_closest_matches(
+    prepared_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = async_runner.run(answer_query("Show office buildings under $35/sq ft."))
+
+    assert payload["status"] == "no_results"
+    assert payload["missing_data_explanation"] is not None
+    assert "Closest matches after relaxing numeric/date filters" in payload["rendered_answer"]
+    assert payload["filters"]["missing_data_explanation"]["blocking_filters"]
+
+
+@pytest.mark.golden
+def test_data_quality_query_explains_missing_structured_coverage(
+    prepared_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = async_runner.run(answer_query("What source data is missing from the indexed corpus?"))
+
+    assert payload["status"] == "answered"
+    assert payload["evidence_count"] == 0
+    assert "Data-quality pass" in payload["rendered_answer"]
+    assert "source(s) have text but no extracted property rows" in payload["rendered_answer"]
+    assert payload["data_quality_report"]["sources_without_properties"]
+
+
+@pytest.mark.golden
+def test_tenant_fit_query_uses_local_synthesis_before_toolhouse(
+    prepared_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = async_runner.run(answer_query("Which options look best for a logistics tenant under $35/SF?"))
+
+    assert payload["status"] == "answered"
+    assert payload["route_mode"] == "hybrid"
+    assert "local_synthesis" in payload["reason_codes"]
+    assert "Best local shortlist" in payload["rendered_answer"]
+    assert "*130 Elm Ave*" in payload["rendered_answer"]
+    assert "*Look deeper*" in payload["rendered_answer"]
+    assert payload["filters"]["query_constructor"]["sort"] == "tenant_fit"
+
+    explain_payload = async_runner.run(explain_query(payload["query_id"]))
+
+    assert explain_payload["decision_summary"]["retrieval_mode"] == "structured_tenant_fit"
+    assert explain_payload["evidence"][0]["evidence_role"] == "selected"

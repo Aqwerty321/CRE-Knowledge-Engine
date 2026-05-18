@@ -1,0 +1,49 @@
+%PDF-1.4
+% native demo fixture
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+5 0 obj
+<< /Length 256 >>
+stream
+BT
+/F1 10 Tf
+12 TL
+72 760 Td
+(130 Elm Ave) Tj
+T*
+(Industrial warehouse with loading dock and yard access) Tj
+T*
+(18,500 SF) Tj
+T*
+(Availability: Immediate) Tj
+T*
+(Asking rent: $32/SF annual) Tj
+T*
+(Near 123 Main Street and regional truck routes.) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000031 00000 n 
+0000000080 00000 n 
+0000000137 00000 n 
+0000000263 00000 n 
+0000000333 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+639
+%%EOF

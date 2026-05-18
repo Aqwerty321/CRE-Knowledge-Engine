@@ -1,0 +1,45 @@
+%PDF-1.4
+% native demo fixture
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+5 0 obj
+<< /Length 409 >>
+stream
+BT
+/F1 10 Tf
+12 TL
+72 760 Td
+(Q2 Metro Market Snapshot) Tj
+T*
+(Industrial demand remains strongest where listings mention loading access, trailer storage, or usable yard.) Tj
+T*
+(Logistics tenants continue to prefer availability this year and pricing under $35/SF where possible.) Tj
+T*
+(Older inventory is being revised by broker corrections, so the freshest sourced inventory should outrank stale) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000031 00000 n 
+0000000080 00000 n 
+0000000137 00000 n 
+0000000263 00000 n 
+0000000333 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+792
+%%EOF

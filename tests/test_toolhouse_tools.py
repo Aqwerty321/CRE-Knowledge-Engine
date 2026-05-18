@@ -1,0 +1,369 @@
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+
+import pytest
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import delete, select
+from sqlalchemy.exc import SQLAlchemyError
+
+from app.answering.query_service import answer_query
+from app.db.session import SessionFactory, engine
+from app.ingestion.sample_importer import import_sample_data
+from app.models import AgentRun, AnswerSnapshot, EvidenceItem, Query
+from app.toolhouse.client import ToolhouseRunResult, run_toolhouse_deeper_review
+from app.toolhouse import (
+    aggregate_properties_tool,
+    audit_data_tool,
+    explain_evidence_tool,
+    get_source_detail_tool,
+    local_deeper_review_tool,
+    nearby_properties_tool,
+    search_properties_tool,
+    search_source_chunks_tool,
+)
+from app.toolhouse.local_agent import validate_agent_response
+
+
+class FakeToolhouseClient:
+    def __init__(self, response_payload: dict[str, object]) -> None:
+        self.response_payload = response_payload
+
+    async def send_message(self, message: str, *, run_id: str | None = None) -> ToolhouseRunResult:
+        assert "Use CRE Backend MCP first" in message
+        return ToolhouseRunResult(
+            agent_id="fake-agent",
+            run_id="fake-run",
+            raw_response="{}",
+            response_payload=self.response_payload,
+        )
+
+
+def _ensure_schema() -> None:
+    command.upgrade(Config("alembic.ini"), "head")
+
+
+async def _prepare_database() -> None:
+    await import_sample_data(Path("sample-data"))
+    async with SessionFactory() as session:
+        async with session.begin():
+            await session.execute(delete(AnswerSnapshot))
+            await session.execute(delete(EvidenceItem))
+            await session.execute(delete(AgentRun))
+            await session.execute(delete(Query))
+
+
+async def _load_agent_run(agent_run_id: str) -> AgentRun | None:
+    async with SessionFactory() as session:
+        return await session.get(AgentRun, agent_run_id)
+
+
+@pytest.fixture
+def async_runner() -> asyncio.Runner:
+    with asyncio.Runner() as runner:
+        yield runner
+        runner.run(engine.dispose())
+
+
+@pytest.fixture
+def prepared_db(async_runner: asyncio.Runner) -> None:
+    try:
+        _ensure_schema()
+        async_runner.run(_prepare_database())
+    except (OSError, SQLAlchemyError) as exc:
+        pytest.skip(f"Postgres not available for Toolhouse tool tests: {exc}")
+
+
+@pytest.mark.golden
+def test_toolhouse_tools_are_evidence_bound_and_query_constructor_ready(
+    prepared_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    answer_payload = async_runner.run(answer_query("Show industrial listings over 30k SF under $25/SF."))
+
+    evidence_payload = async_runner.run(explain_evidence_tool(str(answer_payload["query_id"])))
+    deeper_payload = async_runner.run(local_deeper_review_tool(str(answer_payload["query_id"])))
+    search_payload = async_runner.run(
+        search_properties_tool(
+            {
+                "property_types": ["industrial"],
+                "price_per_sq_ft_lt": "25",
+                "sq_ft_gte": 30000,
+                "limit": 5,
+            }
+        )
+    )
+    source_id = search_payload["results"][0]["source_document"]["id"]
+    source_payload = async_runner.run(get_source_detail_tool(str(source_id)))
+    aggregate_payload = async_runner.run(
+        aggregate_properties_tool(
+            {
+                "property_types": ["industrial"],
+                "price_per_sq_ft_lt": "25",
+                "sq_ft_gte": 30000,
+            },
+            group_by="property_type",
+            metrics=["count", "sum_sq_ft", "avg_price_per_sq_ft"],
+        )
+    )
+    chunk_payload = async_runner.run(
+        search_source_chunks_tool(
+            "loading dock yard logistics",
+            {"property_types": ["industrial"], "limit": 5},
+        )
+    )
+    nearby_payload = async_runner.run(
+        nearby_properties_tool(
+            {"lat": "40.750700", "lng": "-73.996700", "label": "120 Main St"},
+            3.0,
+            {"property_types": ["office"], "limit": 5},
+        )
+    )
+    audit_payload = async_runner.run(audit_data_tool())
+
+    assert evidence_payload["status"] == "ready"
+    assert evidence_payload["payload"]["allowed_evidence_ids"]
+    assert deeper_payload["payload"]["validation"]["valid"] is True
+    assert search_payload["query_constructor"]["base_table"] == "property_records"
+    assert search_payload["result_count"] >= 3
+    assert source_payload["status"] == "ok"
+    assert source_payload["chunks"]
+    assert aggregate_payload["status"] == "ok"
+    assert aggregate_payload["matched_record_count"] >= 1
+    assert aggregate_payload["rows"][0]["metrics"]["count"] >= 1
+    assert chunk_payload["status"] == "ok"
+    assert chunk_payload["result_count"] >= 1
+    assert nearby_payload["status"] == "ok"
+    assert nearby_payload["result_count"] >= 1
+    assert audit_payload["status"] == "ok"
+    assert audit_payload["toolhouse_readiness"]["status"] == "ready_for_bounded_agent"
+
+
+@pytest.mark.golden
+def test_toolhouse_deeper_review_accepts_valid_agent_citations(
+    prepared_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    answer_payload = async_runner.run(answer_query("Show industrial listings over 30k SF under $25/SF."))
+    evidence_payload = async_runner.run(explain_evidence_tool(str(answer_payload["query_id"])))
+    evidence_id = evidence_payload["payload"]["allowed_evidence_ids"][0]
+
+    deeper_payload = async_runner.run(
+        run_toolhouse_deeper_review(
+            str(answer_payload["query_id"]),
+            client=FakeToolhouseClient(
+                {
+                    "status": "answered",
+                    "rendered_answer": "Toolhouse-backed answer.",
+                    "cited_evidence_ids": [evidence_id],
+                    "confidence_label": "high",
+                    "reasoning_summary": "Grounded in explain_evidence.",
+                    "mcp_tools_used": ["explain_evidence"],
+                    "toolhouse_integrations_used": [],
+                    "slack_tools_used": [],
+                    "external_sources_consulted": [],
+                    "unsupported_claims_dropped": [],
+                    "missing_data": [],
+                    "suggested_followups": [],
+                }
+            ),
+        )
+    )
+
+    assert deeper_payload["status"] == "answered"
+    assert deeper_payload["rendered_answer"] == "Toolhouse-backed answer."
+    assert deeper_payload["validation"]["valid"] is True
+    assert deeper_payload["toolhouse_run_id"] == "fake-run"
+    assert deeper_payload["agent_run_id"]
+
+    agent_run = async_runner.run(_load_agent_run(str(deeper_payload["agent_run_id"])))
+
+    assert agent_run is not None
+    assert agent_run.provider == "toolhouse"
+    assert agent_run.status == "answered"
+    assert agent_run.toolhouse_agent_id == "fake-agent"
+    assert agent_run.toolhouse_run_id == "fake-run"
+    assert agent_run.validation_json["valid"] is True
+    assert agent_run.allowed_evidence_ids_json
+    assert agent_run.cited_evidence_ids_json == [evidence_id]
+    assert agent_run.response_payload_json["rendered_answer"] == "Toolhouse-backed answer."
+    assert agent_run.rendered_answer == "Toolhouse-backed answer."
+
+
+def test_validate_agent_response_rejects_answer_without_citations() -> None:
+    validation = validate_agent_response(
+        allowed_evidence_ids={"11111111-1111-4111-8111-111111111111"},
+        response_payload={
+            "status": "answered",
+            "rendered_answer": "Looks good, but cites nothing.",
+            "cited_evidence_ids": [],
+            "confidence_label": "high",
+            "reasoning_summary": "No citation support.",
+            "mcp_tools_used": ["explain_evidence"],
+            "toolhouse_integrations_used": [],
+            "slack_tools_used": [],
+            "external_sources_consulted": [],
+            "unsupported_claims_dropped": [],
+            "missing_data": [],
+            "suggested_followups": [],
+        },
+    )
+
+    assert validation["valid"] is False
+    assert "answered responses must cite at least one allowed evidence ID" in validation["schema_errors"]
+
+
+def test_validate_agent_response_accepts_mcp_unavailable_without_citations() -> None:
+    validation = validate_agent_response(
+        allowed_evidence_ids=set(),
+        response_payload={
+            "status": "mcp_unavailable",
+            "rendered_answer": "MCP is unavailable, so no CRE facts were returned.",
+            "cited_evidence_ids": [],
+            "confidence_label": "low",
+            "reasoning_summary": "Required MCP access was unavailable.",
+            "mcp_tools_used": [],
+            "toolhouse_integrations_used": [],
+            "slack_tools_used": [],
+            "external_sources_consulted": [],
+            "unsupported_claims_dropped": ["All CRE claims were withheld."],
+            "missing_data": ["CRE Backend MCP access."],
+            "suggested_followups": ["Reconnect MCP and retry."],
+        },
+    )
+
+    assert validation["valid"] is True
+
+
+def test_validate_agent_response_accepts_valid_optional_comparison_table() -> None:
+    validation = validate_agent_response(
+        allowed_evidence_ids={"11111111-1111-4111-8111-111111111111"},
+        response_payload={
+            "status": "answered",
+            "rendered_answer": "*Deeper read*\n- 240 Harbor Rd leads.",
+            "comparison_table": {
+                "title": "Quick comparison",
+                "columns": ["Addr", "SF", "Rent", "Avail"],
+                "rows": [
+                    ["240 Harbor Rd", "62,000 SF", "$18.00/SF", "Aug 2026"],
+                    ["88 Foundry Ln", "44,000 SF", "$21.50/SF", "Q2 2026"],
+                ],
+            },
+            "cited_evidence_ids": ["11111111-1111-4111-8111-111111111111"],
+            "confidence_label": "high",
+            "reasoning_summary": "Grounded in explain_evidence.",
+            "mcp_tools_used": ["explain_evidence"],
+            "toolhouse_integrations_used": [],
+            "slack_tools_used": [],
+            "external_sources_consulted": [],
+            "unsupported_claims_dropped": [],
+            "missing_data": [],
+            "suggested_followups": [],
+        },
+    )
+
+    assert validation["valid"] is True
+
+
+def test_validate_agent_response_rejects_malformed_comparison_table() -> None:
+    validation = validate_agent_response(
+        allowed_evidence_ids={"11111111-1111-4111-8111-111111111111"},
+        response_payload={
+            "status": "answered",
+            "rendered_answer": "Table is malformed.",
+            "comparison_table": {
+                "columns": ["Addr", "SF", "Rent"],
+                "rows": [["240 Harbor Rd", "62,000 SF"]],
+            },
+            "cited_evidence_ids": ["11111111-1111-4111-8111-111111111111"],
+            "confidence_label": "high",
+            "reasoning_summary": "Grounded in explain_evidence.",
+            "mcp_tools_used": ["explain_evidence"],
+            "toolhouse_integrations_used": [],
+            "slack_tools_used": [],
+            "external_sources_consulted": [],
+            "unsupported_claims_dropped": [],
+            "missing_data": [],
+            "suggested_followups": [],
+        },
+    )
+
+    assert validation["valid"] is False
+    assert "comparison_table.rows must be an array with at least 2 rows" in validation["schema_errors"]
+
+
+def test_validate_agent_response_rejects_unsupported_tools_and_external_source_roles() -> None:
+    validation = validate_agent_response(
+        allowed_evidence_ids={"11111111-1111-4111-8111-111111111111"},
+        response_payload={
+            "status": "answered",
+            "rendered_answer": "This uses unsupported surface area.",
+            "cited_evidence_ids": ["11111111-1111-4111-8111-111111111111"],
+            "confidence_label": "medium",
+            "reasoning_summary": "Claims to use an unsupported tool.",
+            "mcp_tools_used": ["search_properties", "write_database"],
+            "toolhouse_integrations_used": [],
+            "slack_tools_used": [],
+            "external_sources_consulted": [
+                {"title": "Unknown site", "url": "https://example.com", "role": "primary_fact_source"}
+            ],
+            "unsupported_claims_dropped": [],
+            "missing_data": [],
+            "suggested_followups": [],
+        },
+    )
+
+    assert validation["valid"] is False
+    assert "mcp_tools_used contains unsupported tool names: write_database" in validation["schema_errors"]
+    assert "external_sources_consulted[0].role is unsupported" in validation["schema_errors"]
+
+
+@pytest.mark.golden
+def test_toolhouse_deeper_review_falls_back_on_invalid_agent_contract(
+    prepared_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    answer_payload = async_runner.run(answer_query("Show industrial listings over 30k SF under $25/SF."))
+
+    deeper_payload = async_runner.run(
+        run_toolhouse_deeper_review(
+            str(answer_payload["query_id"]),
+            client=FakeToolhouseClient(
+                {
+                    "status": "answered",
+                    "rendered_answer": "Toolhouse answer without citations.",
+                    "cited_evidence_ids": [],
+                    "confidence_label": "high",
+                    "reasoning_summary": "Missing citation support.",
+                    "mcp_tools_used": ["explain_evidence"],
+                    "toolhouse_integrations_used": [],
+                    "slack_tools_used": [],
+                    "external_sources_consulted": [],
+                    "unsupported_claims_dropped": [],
+                    "missing_data": [],
+                    "suggested_followups": [],
+                }
+            ),
+        )
+    )
+
+    assert deeper_payload["status"] == "answered"
+    assert deeper_payload["toolhouse_fallback"] is True
+    assert deeper_payload["validation"]["valid"] is True
+    assert deeper_payload["toolhouse_validation"]["valid"] is False
+    assert "Deeper review" in deeper_payload["rendered_answer"]
+    assert "*Evidence checked:*" in deeper_payload["rendered_answer"]
+    assert deeper_payload["agent_run_id"]
+
+    agent_run = async_runner.run(_load_agent_run(str(deeper_payload["agent_run_id"])))
+
+    assert agent_run is not None
+    assert agent_run.provider == "local_fallback"
+    assert agent_run.status == "answered"
+    assert agent_run.toolhouse_run_id == "fake-run"
+    assert agent_run.validation_json["valid"] is False
+    assert agent_run.response_payload_json["rendered_answer"] == "Toolhouse answer without citations."
+    assert agent_run.fallback_reason is not None
+    assert agent_run.fallback_reason.startswith("validation_error:")

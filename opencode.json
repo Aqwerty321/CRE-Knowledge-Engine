@@ -1,0 +1,23 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [
+    "./docs/opencode/mcp-workflows.md",
+    "./docs/opencode/runtime-notes.md"
+  ],
+  "plugin": [
+    ".opencode/plugins/graphify.js"
+  ],
+  "mcp": {
+    "graphify-local": {
+      "type": "local",
+      "enabled": true,
+      "command": [
+        "/home/Aaditya/venvs/graphify/bin/python",
+        "-m",
+        "graphify.serve",
+        "/home/Aaditya/CRE-Knowledge-Engine/graphify-out/graph.json"
+      ],
+      "environment": {}
+    }
+  }
+}

@@ -1,0 +1,545 @@
+{
+  "team_id": "T_CRE_DEMO",
+  "channel_id": "C_CRE_LISTINGS_DEMO",
+  "channel_name": "cre-listings-demo",
+  "sources": [
+    {
+      "source_id": "F1",
+      "source_type": "pdf",
+      "posted_at": "2026-05-14T14:00:00+00:00",
+      "slack_user_id": "U_SARAH",
+      "slack_user_name": "Sarah",
+      "slack_ts": "1715695200.000100",
+      "slack_file_id": "FILE_F1",
+      "file_name": "main-street-office-flyer.pdf",
+      "file_mime_type": "application/pdf",
+      "source_url": "https://demo.local/files/main-street-office-flyer.pdf",
+      "local_path": "files/main-street-office-flyer.pdf",
+      "chunks": [
+        {
+          "chunk_index": 0,
+          "section_name": "Page 1",
+          "page_number": 1
+        }
+      ],
+      "properties": [
+        {
+          "address": "120 Main St",
+          "property_type": "office",
+          "sq_ft": 4800,
+          "price_per_sq_ft": "42.00",
+          "price_basis": "annual_rent",
+          "availability": "Q3 2026",
+          "availability_date": "2026-09-01",
+          "market": "Penn Plaza",
+          "geo_lat": "40.750700",
+          "geo_lng": "-73.996700",
+          "source_page": 1,
+          "extraction_method": "manual_seed",
+          "confidence": "1.0000",
+          "source_authority_score": "0.9000",
+          "freshness_score": "0.8600",
+          "duplicate_group_key": "120 main st|office",
+          "chunk_index": 0
+        }
+      ]
+    },
+    {
+      "source_id": "F2",
+      "source_type": "pdf",
+      "posted_at": "2026-05-14T15:00:00+00:00",
+      "slack_user_id": "U_JOHN",
+      "slack_user_name": "John",
+      "slack_ts": "1715698800.000100",
+      "slack_file_id": "FILE_F2",
+      "file_name": "elm-ave-industrial-flyer.pdf",
+      "file_mime_type": "application/pdf",
+      "source_url": "https://demo.local/files/elm-ave-industrial-flyer.pdf",
+      "local_path": "files/elm-ave-industrial-flyer.pdf",
+      "chunks": [
+        {
+          "chunk_index": 0,
+          "section_name": "Page 1",
+          "page_number": 1
+        }
+      ],
+      "properties": [
+        {
+          "address": "130 Elm Ave",
+          "property_type": "industrial",
+          "sq_ft": 18500,
+          "price_per_sq_ft": "32.00",
+          "price_basis": "annual_rent",
+          "availability": "Immediate",
+          "availability_date": "2026-05-16",
+          "market": "West Side",
+          "geo_lat": "40.752200",
+          "geo_lng": "-73.999300",
+          "source_page": 1,
+          "extraction_method": "manual_seed",
+          "confidence": "1.0000",
+          "source_authority_score": "0.9000",
+          "freshness_score": "0.8500",
+          "duplicate_group_key": "130 elm ave|industrial",
+          "chunk_index": 0
+        }
+      ]
+    },
+    {
+      "source_id": "F3",
+      "source_type": "pdf",
+      "posted_at": "2026-05-13T11:00:00+00:00",
+      "slack_user_id": "U_MAYA",
+      "slack_user_name": "Maya",
+      "slack_ts": "1715598000.000100",
+      "slack_file_id": "FILE_F3",
+      "file_name": "market-street-retail-brief.pdf",
+      "file_mime_type": "application/pdf",
+      "source_url": "https://demo.local/files/market-street-retail-brief.pdf",
+      "local_path": "files/market-street-retail-brief.pdf",
+      "chunks": [
+        {
+          "chunk_index": 0,
+          "section_name": "Page 2",
+          "page_number": 2
+        }
+      ],
+      "properties": [
+        {
+          "address": "455 Market St",
+          "property_type": "retail",
+          "sq_ft": 7200,
+          "price_per_sq_ft": "55.00",
+          "price_basis": "annual_rent",
+          "availability": "Now",
+          "availability_date": "2026-05-16",
+          "market": "Market Corridor",
+          "geo_lat": "40.754600",
+          "geo_lng": "-73.991500",
+          "source_page": 2,
+          "extraction_method": "manual_seed",
+          "confidence": "1.0000",
+          "source_authority_score": "0.8600",
+          "freshness_score": "0.7800",
+          "duplicate_group_key": "455 market st|retail",
+          "chunk_index": 0
+        }
+      ]
+    },
+    {
+      "source_id": "F4",
+      "source_type": "pdf",
+      "posted_at": "2026-05-12T10:30:00+00:00",
+      "slack_user_id": "U_PRIYA",
+      "slack_user_name": "Priya",
+      "slack_ts": "1715509800.000100",
+      "slack_file_id": "FILE_F4",
+      "file_name": "q2-metro-market-snapshot.pdf",
+      "file_mime_type": "application/pdf",
+      "source_url": "https://demo.local/files/q2-metro-market-snapshot.pdf",
+      "local_path": "files/q2-metro-market-snapshot.pdf",
+      "chunks": [
+        {
+          "chunk_index": 0,
+          "section_name": "Executive Summary",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "source_id": "F5",
+      "source_type": "csv",
+      "posted_at": "2026-05-12T15:00:00+00:00",
+      "slack_user_id": "U_SARAH",
+      "slack_user_name": "Sarah",
+      "slack_ts": "1715526000.000100",
+      "slack_file_id": "FILE_F5",
+      "file_name": "downtown-office-inventory.csv",
+      "file_mime_type": "text/csv",
+      "source_url": "https://demo.local/files/downtown-office-inventory.csv",
+      "local_path": "files/downtown-office-inventory.csv",
+      "chunks": [
+        {
+          "chunk_index": 0,
+          "section_name": "Rows 2-5"
+        }
+      ],
+      "properties": [
+        {
+          "address": "17 Pine St",
+          "property_type": "office",
+          "sq_ft": 9750,
+          "price_per_sq_ft": "48.00",
+          "price_basis": "annual_rent",
+          "availability": "Jun 2026",
+          "availability_date": "2026-06-01",
+          "market": "Downtown",
+          "geo_lat": "40.744900",
+          "geo_lng": "-73.992700",
+          "source_row": 2,
+          "extraction_method": "manual_seed",
+          "confidence": "1.0000",
+          "source_authority_score": "0.9700",
+          "freshness_score": "0.8200",
+          "duplicate_group_key": "17 pine st|office",
+          "chunk_index": 0
+        },
+        {
+          "address": "900 North Loop",
+          "property_type": "office",
+          "sq_ft": 22000,
+          "price_per_sq_ft": "61.00",
+          "price_basis": "annual_rent",
+          "availability": "Jan 2027",
+          "availability_date": "2027-01-01",
+          "market": "Midtown",
+          "geo_lat": "40.761000",
+          "geo_lng": "-73.988000",
+          "source_row": 5,
+          "extraction_method": "manual_seed",
+          "confidence": "1.0000",
+          "source_authority_score": "0.9700",
+          "freshness_score": "0.8000",
+          "duplicate_group_key": "900 north loop|office",
+          "chunk_index": 0
+        }
+      ]
+    },
+    {
+      "source_id": "F6",
+      "source_type": "csv",
+      "posted_at": "2026-05-13T09:00:00+00:00",
+      "slack_user_id": "U_PRIYA",
+      "slack_user_name": "Priya",
+      "slack_ts": "1715590800.000100",
+      "slack_file_id": "FILE_F6",
+      "file_name": "industrial-availability.csv",
+      "file_mime_type": "text/csv",
+      "source_url": "https://demo.local/files/industrial-availability.csv",
+      "local_path": "files/industrial-availability.csv",
+      "chunks": [
+        {
+          "chunk_index": 0,
+          "section_name": "Rows 2-4"
+        }
+      ],
+      "properties": [
+        {
+          "address": "88 Foundry Ln",
+          "property_type": "industrial",
+          "sq_ft": 44000,
+          "price_per_sq_ft": "21.50",
+          "price_basis": "annual_rent",
+          "availability": "Q2 2026",
+          "availability_date": "2026-04-01",
+          "market": "Harbor District",
+          "geo_lat": "40.743000",
+          "geo_lng": "-74.004000",
+          "geo_lat": "40.746200",
+          "geo_lng": "-73.994500",
+          "confidence": "1.0000",
+          "source_authority_score": "0.9800",
+          "freshness_score": "0.8800",
+          "duplicate_group_key": "88 foundry ln|industrial",
+          "chunk_index": 0
+        },
+        {
+          "address": "240 Harbor Rd",
+          "property_type": "industrial",
+          "sq_ft": 58000,
+          "price_per_sq_ft": "18.00",
+          "price_basis": "annual_rent",
+          "availability": "Aug 2026",
+          "availability_date": "2026-08-01",
+          "market": "Harbor District",
+          "geo_lat": "40.739500",
+          "geo_lng": "-74.010200",
+          "source_row": 3,
+          "extraction_method": "manual_seed",
+          "confidence": "1.0000",
+          "source_authority_score": "0.9800",
+          "freshness_score": "0.7200",
+          "duplicate_group_key": "240 harbor rd|industrial",
+          "chunk_index": 0
+        }
+      ]
+    },
+    {
+      "source_id": "F7",
+      "source_type": "xlsx",
+      "posted_at": "2026-05-13T13:00:00+00:00",
+      "slack_user_id": "U_MAYA",
+      "slack_user_name": "Maya",
+      "slack_ts": "1715605200.000100",
+      "slack_file_id": "FILE_F7",
+      "file_name": "broker-availability-tracker.xlsx",
+      "file_mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "source_url": "https://demo.local/files/broker-availability-tracker.xlsx",
+      "local_path": "files/broker-availability-tracker.xlsx",
+      "chunks": [
+        {
+          "chunk_index": 0,
+          "section_name": "Industrial and MixedUse sheets"
+        }
+      ],
+      "properties": [
+        {
+          "address": "700 Logistics Pkwy",
+          "property_type": "industrial",
+          "sq_ft": 120000,
+          "price_per_sq_ft": "12.75",
+          "price_basis": "annual_rent",
+          "availability": "Q4 2026",
+          "availability_date": "2026-10-01",
+          "market": "Logistics Belt",
+          "geo_lat": "40.725000",
+          "geo_lng": "-74.025000",
+          "source_row": 4,
+          "extraction_method": "manual_seed",
+          "confidence": "1.0000",
+          "source_authority_score": "0.9600",
+          "freshness_score": "0.8300",
+          "duplicate_group_key": "700 logistics pkwy|industrial",
+          "chunk_index": 0
+        },
+        {
+          "address": "310 Canal Works",
+          "property_type": "mixed_use",
+          "sq_ft": 15600,
+          "price_per_sq_ft": "39.00",
+          "price_basis": "annual_rent",
+          "availability": "May 2026",
+          "availability_date": "2026-05-15",
+          "market": "Canal District",
+          "geo_lat": "40.746200",
+          "geo_lng": "-74.001900",
+          "source_row": 2,
+          "extraction_method": "manual_seed",
+          "confidence": "1.0000",
+          "source_authority_score": "0.9600",
+          "freshness_score": "0.8400",
+          "duplicate_group_key": "310 canal works|mixed_use",
+          "chunk_index": 0
+        }
+      ]
+    },
+    {
+      "source_id": "F8",
+      "source_type": "text",
+      "posted_at": "2026-05-14T09:30:00+00:00",
+      "slack_user_id": "U_JOHN",
+      "slack_user_name": "John",
+      "slack_ts": "1715679000.000100",
+      "slack_file_id": "FILE_F8",
+      "file_name": "slack-field-notes.txt",
+      "file_mime_type": "text/plain",
+      "source_url": "https://demo.local/files/slack-field-notes.txt",
+      "local_path": "files/slack-field-notes.txt",
+      "chunks": [
+        {
+          "chunk_index": 0,
+          "section_name": "Field Notes"
+        }
+      ],
+      "properties": [
+        {
+          "address": "64 Union Yard",
+          "property_type": "industrial",
+          "sq_ft": 31000,
+          "price_per_sq_ft": "24.00",
+          "price_basis": "annual_rent",
+          "availability": "Immediate",
+          "availability_date": "2026-05-16",
+          "market": "Main West",
+          "geo_lat": "40.751800",
+          "geo_lng": "-74.006400",
+          "extraction_method": "manual_seed",
+          "confidence": "0.9300",
+          "source_authority_score": "0.7000",
+          "freshness_score": "0.8500",
+          "duplicate_group_key": "64 union yard|industrial",
+          "chunk_index": 0
+        }
+      ]
+    },
+    {
+      "source_id": "F9",
+      "source_type": "text",
+      "posted_at": "2026-05-14T12:00:00+00:00",
+      "slack_user_id": "U_MAYA",
+      "slack_user_name": "Maya",
+      "slack_ts": "1715688000.000100",
+      "slack_file_id": "FILE_F9",
+      "file_name": "tenant-requirements-summary.txt",
+      "file_mime_type": "text/plain",
+      "source_url": "https://demo.local/files/tenant-requirements-summary.txt",
+      "local_path": "files/tenant-requirements-summary.txt",
+      "chunks": [
+        {
+          "chunk_index": 0,
+          "section_name": "Tenant Brief"
+        }
+      ]
+    },
+    {
+      "source_id": "F10",
+      "source_type": "csv",
+      "posted_at": "2026-05-15T08:00:00+00:00",
+      "slack_user_id": "U_PRIYA",
+      "slack_user_name": "Priya",
+      "slack_ts": "1715760000.000100",
+      "slack_file_id": "FILE_F10",
+      "file_name": "source-corrections.csv",
+      "file_mime_type": "text/csv",
+      "source_url": "https://demo.local/files/source-corrections.csv",
+      "local_path": "files/source-corrections.csv",
+      "chunks": [
+        {
+          "chunk_index": 0,
+          "section_name": "Corrections"
+        }
+      ],
+      "properties": [
+        {
+          "address": "240 Harbor Rd",
+          "property_type": "industrial",
+          "sq_ft": 62000,
+          "price_per_sq_ft": "18.00",
+          "price_basis": "annual_rent",
+          "availability": "Aug 2026",
+          "availability_date": "2026-08-01",
+          "market": "Harbor District",
+          "geo_lat": "40.739500",
+          "geo_lng": "-74.010200",
+          "source_row": 2,
+          "extraction_method": "manual_seed",
+          "confidence": "1.0000",
+          "source_authority_score": "0.9900",
+          "freshness_score": "0.9800",
+          "duplicate_group_key": "240 harbor rd|industrial",
+          "chunk_index": 0
+        }
+      ]
+    },
+    {
+      "source_id": "M1",
+      "source_type": "slack_message",
+      "posted_at": "2026-05-14T14:05:00+00:00",
+      "slack_user_id": "U_SARAH",
+      "slack_user_name": "Sarah",
+      "slack_ts": "1715695500.000100",
+      "raw_text": "Uploaded the Main Street office flyer. 120 Main is still targeting Q3 2026, asking $42/SF.",
+      "chunks": [
+        {
+          "chunk_index": 0,
+          "section_name": "Slack message"
+        }
+      ],
+      "properties": [
+        {
+          "address": "120 Main St",
+          "property_type": "office",
+          "sq_ft": 4800,
+          "price_per_sq_ft": "42.00",
+          "price_basis": "annual_rent",
+          "availability": "Q3 2026",
+          "availability_date": "2026-09-01",
+          "market": "Penn Plaza",
+          "geo_lat": "40.750700",
+          "geo_lng": "-73.996700",
+          "extraction_method": "manual_seed",
+          "confidence": "0.9000",
+          "source_authority_score": "0.7200",
+          "freshness_score": "0.9000",
+          "duplicate_group_key": "120 main st|office",
+          "chunk_index": 0
+        }
+      ]
+    },
+    {
+      "source_id": "M2",
+      "source_type": "slack_message",
+      "posted_at": "2026-05-14T16:10:00+00:00",
+      "slack_user_id": "U_JOHN",
+      "slack_user_name": "John",
+      "slack_ts": "1715703000.000100",
+      "raw_text": "The Union Yard space at 64 Union Yard is available immediately. Around 31k SF, industrial, asking $24/SF.",
+      "chunks": [
+        {
+          "chunk_index": 0,
+          "section_name": "Slack message"
+        }
+      ],
+      "properties": [
+        {
+          "address": "64 Union Yard",
+          "property_type": "industrial",
+          "sq_ft": 31000,
+          "price_per_sq_ft": "24.00",
+          "price_basis": "annual_rent",
+          "availability": "Immediate",
+          "availability_date": "2026-05-16",
+          "market": "Main West",
+          "geo_lat": "40.751800",
+          "geo_lng": "-74.006400",
+          "extraction_method": "manual_seed",
+          "confidence": "0.9000",
+          "source_authority_score": "0.7100",
+          "freshness_score": "0.9100",
+          "duplicate_group_key": "64 union yard|industrial",
+          "chunk_index": 0
+        }
+      ]
+    },
+    {
+      "source_id": "M3",
+      "source_type": "slack_message",
+      "posted_at": "2026-05-15T08:10:00+00:00",
+      "slack_user_id": "U_PRIYA",
+      "slack_user_name": "Priya",
+      "slack_ts": "1715760600.000100",
+      "raw_text": "Harbor Rd got updated yesterday. 240 Harbor is now 62k SF, not 58k. Use the industrial inventory as source of truth.",
+      "chunks": [
+        {
+          "chunk_index": 0,
+          "section_name": "Slack message"
+        }
+      ],
+      "properties": [
+        {
+          "address": "240 Harbor Rd",
+          "property_type": "industrial",
+          "sq_ft": 62000,
+          "price_per_sq_ft": "18.00",
+          "price_basis": "annual_rent",
+          "availability": "Aug 2026",
+          "availability_date": "2026-08-01",
+          "market": "Harbor District",
+          "geo_lat": "40.739500",
+          "geo_lng": "-74.010200",
+          "extraction_method": "manual_seed",
+          "confidence": "0.9500",
+          "source_authority_score": "0.7600",
+          "freshness_score": "0.9700",
+          "duplicate_group_key": "240 harbor rd|industrial",
+          "chunk_index": 0
+        }
+      ]
+    },
+    {
+      "source_id": "M4",
+      "source_type": "slack_message",
+      "posted_at": "2026-05-15T09:45:00+00:00",
+      "slack_user_id": "U_MAYA",
+      "slack_user_name": "Maya",
+      "slack_ts": "1715766300.000100",
+      "raw_text": "Tenant wants industrial near Main with loading access, ideally under $35/SF and available soon.",
+      "chunks": [
+        {
+          "chunk_index": 0,
+          "section_name": "Slack message"
+        }
+      ]
+    }
+  ]
+}
