@@ -359,6 +359,105 @@ The diagrams are split on purpose. The first five show the running system withou
 
 The most important boundary is simple: Postgres is where the system keeps sources, facts, jobs, evidence, answer snapshots, and agent runs. Toolhouse can write a deeper explanation, but the backend decides what evidence exists and whether the returned citations are valid.
 
+## How Data Gets In
+
+The app has three ways to learn about CRE data: a local sample import for repeatable demos, a bounded historical Slack backfill, and live Slack events. All three paths are shaped into the same internal dataset model before parsing, extraction, storage, and indexing. That is intentional: a golden query against local sample data should exercise the same tables and answer code as a query against live Slack data.
+
+```mermaid
+%%{init: {"flowchart": {"curve": "basis", "nodeSpacing": 34, "rankSpacing": 46}} }%%
+flowchart LR
+    classDef entry fill:#e8f2ff,stroke:#2563eb,color:#111827
+    classDef gate fill:#fff7ed,stroke:#ea580c,color:#111827
+    classDef resolve fill:#eef2ff,stroke:#4f46e5,color:#111827
+    classDef parse fill:#ecfdf5,stroke:#059669,color:#111827
+    classDef store fill:#f8fafc,stroke:#475569,color:#111827
+    classDef quality fill:#fefce8,stroke:#ca8a04,color:#111827
+
+    subgraph E[Entry points]
+        direction TB
+        E1[Local sample import\nmanifest + sample files]
+        E2[Historical Slack backfill\nrecent channel history + thread replies]
+        E3[Live Slack events\nmessage + file_shared callbacks]
+    end
+
+    subgraph G[Gate and queue]
+        direction TB
+        G1[Allowed channels + channel policy\ndisabled, files_only, listings_only, evidence]
+        G2[Noise checks\nbots, empty events, unsupported subtypes, query-like chatter]
+        G3[(slack_events\nretry metadata + payload hash)]
+        G4[(ingestion_jobs\nmessage/file checkpoints)]
+    end
+
+    subgraph R[Resolve source]
+        direction TB
+        R1[Message checkpoint\npermalink + raw Slack text]
+        R2[File checkpoint\nfiles.info + private download]
+        R3[SampleDatasetModel\nsame shape for sample + live]
+    end
+
+    subgraph P[Parse and extract]
+        direction TB
+        P1[Native parsers\nCSV rows, XLSX sheets, PDF pages, text]
+        P2[OCR fallback\nGLM-OCR for images + scanned PDFs]
+        P3[CRE signal and fact extraction\naddress, type, SF, rent, availability, market]
+    end
+
+    subgraph S[Persist and index]
+        direction TB
+        S1[(source_documents)]
+        S2[(slack_source_posts)]
+        S3[(chunks\npage, row, section)]
+        S4[(property_records)]
+        S5[(property_field_values)]
+        S6[Optional vector indexing\nQdrant embedding IDs]
+        S7[Quality report\nmissing fields, context-only sources, conflicts]
+    end
+
+    E1 --> R3
+    E2 --> G1
+    E3 --> G1
+    G1 --> G2
+    G2 --> G3
+    G3 --> G4
+    G4 --> R1
+    G4 --> R2
+    R1 --> R3
+    R2 --> R3
+    R3 --> P1
+    P1 --> P2
+    P1 --> P3
+    P2 --> P3
+    P3 --> S1
+    P3 --> S2
+    P3 --> S3
+    P3 --> S4
+    P3 --> S5
+    S3 --> S6
+    S1 --> S7
+    S4 --> S7
+
+    class E1,E2,E3 entry
+    class G1,G2,G3,G4 gate
+    class R1,R2,R3 resolve
+    class P1,P2,P3 parse
+    class S1,S2,S3,S4,S5,S6 store
+    class S7 quality
+```
+
+Historical backfill is deliberately bounded. The worker asks Slack for recent channel history, walks thread replies, and imports only messages or files that pass the same channel policy and CRE-signal checks used by live events. It counts what it saw and what it imported, but it does not treat generic conversation as evidence just because it appeared in a configured channel.
+
+Live ingestion is also conservative. Each Slack delivery is recorded in `slack_events` with retry metadata and a payload hash. Duplicate Slack event IDs are ignored, unconfigured channels are skipped, and allowed events become `ingestion_jobs` with enough checkpoint data to replay the work: team, channel, user, message timestamp, thread timestamp, raw text, or file metadata.
+
+Message jobs and file jobs converge quickly. A message job resolves the Slack permalink and stores the message text. A file job resolves Slack file metadata, downloads supported files into the local Slack download directory, and records file name, MIME type, Slack file ID, source URL, and local path. From there both paths use `SampleDatasetModel`, so local demos and live Slack ingestion share the same importer.
+
+Parsing is source-aware. CSV files become row chunks. XLSX files become sheet-and-row chunks. PDFs keep page numbers when text extraction works; scanned PDFs and images go through GLM-OCR when OCR is enabled. Text files and Slack messages stay as text chunks. Those chunks feed heuristic CRE extraction for addresses, property type, square footage, rent, availability, market, source authority, freshness, and confidence.
+
+Import is an upsert, not a blind append. The importer checks Slack file IDs, Slack message timestamps, local paths, and content hashes to reuse existing sources where appropriate. Before re-importing a source, it clears old child chunks, property records, and source-scoped jobs, then writes fresh chunks, property records, field values, Slack source appearances, and succeeded extract/index job records. If vector indexing is enabled, new chunk IDs are embedded and written to Qdrant.
+
+There is also a cleanup path for live Slack storage. It can remove old Slack-message context that never produced property facts, release old file-download paths from source records, and delete orphaned local downloads under configured retention windows. It skips sources with active jobs and keeps property-backed sources intact.
+
+The quality checks are part of ingestion, not an afterthought. The importer records validation warnings for duplicate source IDs, missing source text, duplicate chunk indexes, property rows pointing at missing chunks, sources without property records, and property records missing important fields. The data-quality answer later reports those gaps directly to the user.
+
 ## How Data And Routing Work
 
 The implementation follows one rule: if the app says a fact in Slack, that fact should point back to a stored source, a normalized property record, or an evidence item. The core code is in [app/models/core.py](app/models/core.py), [app/routing](app/routing), [app/retrieval](app/retrieval), [app/answering/query_service.py](app/answering/query_service.py), and [app/toolhouse](app/toolhouse).
@@ -522,14 +621,14 @@ erDiagram
 
 How the schema is meant to be read:
 
-- `source_documents` is the canonical source table. It covers Slack messages, thread replies, PDFs, CSVs, XLSX files, text notes, and OCR output. Slack messages and Slack files have uniqueness rules, and repeated file content can be recognized by `content_hash`.
-- `slack_source_posts` records where a source showed up in Slack. The same file can be shared twice without creating two canonical documents, but the app still keeps channel, sender, timestamp, and permalink context for each share.
-- `chunks` holds the text used for search. A chunk keeps its page, row, section, embedding ID, and metadata, so a citation can say more than just "somewhere in this PDF."
+- `source_documents` is the canonical source table. It covers Slack messages, thread replies, PDFs, CSVs, XLSX files, text notes, and OCR output.
+- `slack_source_posts` records where a source showed up in Slack, so repeated shares keep their own channel, sender, timestamp, and permalink context.
+- `chunks` holds the text used for search. Page, row, section, embedding ID, and metadata stay attached to the chunk.
 - `property_records` stores facts as they appeared in a source. It does not try to merge everything into one perfect property entity too early. Likely duplicates are grouped with `duplicate_group_key` and resolved when an answer is built.
 - `property_field_values` keeps the field-level audit trail: raw value, normalized value, confidence, method, source span, and extractor version.
 - `queries`, `evidence_items`, and `answer_snapshots` are the answer trail. `Show sources`, `explain-query`, `replay-query`, and Toolhouse escalation all read from that trail.
 - `agent_runs` stores the deeper-review trace: allowed evidence IDs, cited evidence IDs, parsed response, validation result, fallback reason, raw response, and final rendered answer.
-- `slack_events` and `ingestion_jobs` keep Slack fast. The app acknowledges Slack quickly, records retries, and then lets parsing, indexing, answering, and deeper review run through a Postgres-backed queue.
+- `slack_events` and `ingestion_jobs` keep Slack acknowledgement separate from slow work.
 
 ### How Routing Works
 
