@@ -89,12 +89,46 @@ class SlackGateway:
         )
         return dict(response.data)
 
+    async def open_modal(
+        self,
+        *,
+        trigger_id: str,
+        view: dict[str, Any],
+    ) -> dict[str, Any]:
+        if self.client is None:
+            return {"ok": False, "delivery": "skipped"}
+
+        response = await self.client.views_open(
+            trigger_id=trigger_id,
+            view=view,
+        )
+        return dict(response.data)
+
+    async def update_modal(
+        self,
+        *,
+        view_id: str,
+        view: dict[str, Any],
+        view_hash: str | None = None,
+    ) -> dict[str, Any]:
+        if self.client is None:
+            return {"ok": False, "delivery": "skipped"}
+
+        response = await self.client.views_update(
+            view_id=view_id,
+            hash=view_hash,
+            view=view,
+        )
+        return dict(response.data)
+
 
 @dataclass
 class RecordingSlackGateway(SlackGateway):
     thread_replies: list[dict[str, Any]] = field(default_factory=list)
     ephemeral_replies: list[dict[str, Any]] = field(default_factory=list)
     updated_messages: list[dict[str, Any]] = field(default_factory=list)
+    opened_modals: list[dict[str, Any]] = field(default_factory=list)
+    updated_modals: list[dict[str, Any]] = field(default_factory=list)
 
     async def post_thread_reply(
         self,
@@ -167,6 +201,30 @@ class RecordingSlackGateway(SlackGateway):
                 self.updated_messages.append({"channel_id": channel_id, "ts": message_ts, "text": text, "blocks": blocks or []})
                 return {"ok": True, **payload}
         raise ValueError(f"message not found for update: {channel_id} {message_ts}")
+
+    async def open_modal(
+        self,
+        *,
+        trigger_id: str,
+        view: dict[str, Any],
+    ) -> dict[str, Any]:
+        modal_index = len(self.opened_modals) + 1
+        returned_view = {"id": f"V_TEST_{modal_index}", "hash": f"hash-{modal_index}", **view}
+        payload = {"trigger_id": trigger_id, "view": returned_view}
+        self.opened_modals.append(payload)
+        return {"ok": True, **payload}
+
+    async def update_modal(
+        self,
+        *,
+        view_id: str,
+        view: dict[str, Any],
+        view_hash: str | None = None,
+    ) -> dict[str, Any]:
+        returned_view = {"id": view_id, "hash": f"{view_hash or 'hash'}-updated", **view}
+        payload = {"view_id": view_id, "hash": view_hash, "view": returned_view}
+        self.updated_modals.append(payload)
+        return {"ok": True, **payload}
 
 
 @lru_cache(maxsize=1)

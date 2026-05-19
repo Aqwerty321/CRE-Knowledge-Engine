@@ -3,6 +3,98 @@
   "$id": "https://cre-knowledge-engine.local/schemas/toolhouse-look-deeper-output.schema.json",
   "title": "CRE MCP Look Deeper Analyst Output",
   "type": "object",
+  "description": "Primary output schema for look_deeper, force_agent, and follow_up_agent answer tasks. For task=suggest_followups, use $defs.suggest_followups_output instead.",
+  "$defs": {
+    "modal_followup_candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "question"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["average_rent", "availability_before_q3", "conflict_review", "largest_options", "price_spread"]
+        },
+        "question": {"type": "string", "minLength": 1, "maxLength": 74}
+      }
+    },
+    "thread_session_input": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["slack_channel_id", "slack_thread_ts", "prior_accumulated_evidence_ids", "query_history"],
+      "properties": {
+        "thread_session_id": {"type": ["string", "null"], "format": "uuid"},
+        "slack_channel_id": {"type": "string"},
+        "slack_thread_ts": {"type": "string"},
+        "prior_accumulated_evidence_ids": {"type": "array", "items": {"type": "string", "format": "uuid"}, "uniqueItems": true},
+        "query_history": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+        "missing_signals": {"type": "array", "items": {"type": "string"}},
+        "recommended_mcp_calls": {"type": "array", "items": {"type": "object", "additionalProperties": true}}
+      }
+    },
+    "follow_up_context_input": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "parent_query_id": {"type": ["string", "null"], "format": "uuid"},
+        "requested_mode": {"type": "string", "enum": ["instant", "auto", "agent"]},
+        "resolution": {"type": "string"},
+        "coverage": {
+          "type": ["object", "null"],
+          "additionalProperties": true,
+          "properties": {
+            "is_sufficient": {"type": "boolean"},
+            "needs_expansion": {"type": "boolean"},
+            "missing_signals": {"type": "array", "items": {"type": "string"}},
+            "confidence": {"type": "string"},
+            "evidence_count": {"type": "integer"}
+          }
+        }
+      }
+    },
+    "suggest_followups_output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["suggested_followups"],
+      "properties": {
+        "suggested_followups": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "items": {"$ref": "#/$defs/modal_followup_candidate"}
+        }
+      }
+    },
+    "backend_prevalidated_suggestion": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "kind", "question", "mode", "route_mode", "sql_query", "sql_params", "validation"],
+      "properties": {
+        "id": {"type": "string"},
+        "kind": {"type": "string", "enum": ["average_rent", "availability_before_q3", "conflict_review", "largest_options", "price_spread"]},
+        "question": {"type": "string"},
+        "mode": {"type": "string", "const": "instant"},
+        "route_mode": {"type": "string", "const": "instant"},
+        "sql_query": {"type": "string"},
+        "sql_params": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "evidence_ids": {"type": "array", "items": {"type": "string", "format": "uuid"}}
+          }
+        },
+        "validation": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["status", "executor", "raw_sql_execution"],
+          "properties": {
+            "status": {"type": "string", "const": "prevalidated"},
+            "executor": {"type": "string", "const": "backend_instant_template"},
+            "raw_sql_execution": {"type": "boolean", "const": false}
+          }
+        }
+      }
+    }
+  },
   "additionalProperties": false,
   "required": [
     "status",
@@ -140,8 +232,9 @@
     },
     "suggested_followups": {
       "type": "array",
-      "items": {"type": "string"},
-      "description": "Useful next questions or data actions. Keep short."
+      "maxItems": 5,
+      "items": {"$ref": "#/$defs/modal_followup_candidate"},
+      "description": "Modal-ready next follow-up options. Use only allowed kinds. Backend attaches SQL templates, evidence params, IDs, and validation metadata. Return [] when no next option is useful."
     },
     "comparison_table": {
       "type": "object",
@@ -216,7 +309,10 @@
       "external_sources_consulted": [],
       "unsupported_claims_dropped": [],
       "missing_data": [],
-      "suggested_followups": ["Ask for nearby alternatives if the tenant can accept later availability."]
+      "suggested_followups": [
+        {"kind": "price_spread", "question": "What's the rent spread in this set?"},
+        {"kind": "largest_options", "question": "Which are the largest options?"}
+      ]
     }
   ]
 }

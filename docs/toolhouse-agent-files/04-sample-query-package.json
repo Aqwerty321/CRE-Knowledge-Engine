@@ -224,5 +224,68 @@
     "message_ts": "1715782001.000300",
     "user_label": "demo-user"
   },
+  "thread_session": {
+    "thread_session_id": "99999999-9999-4999-8999-999999999999",
+    "slack_channel_id": "C0B476USV7X",
+    "slack_thread_ts": "1715782000.000200",
+    "prior_accumulated_evidence_ids": [
+      "22222222-2222-4222-8222-222222222222",
+      "33333333-3333-4333-8333-333333333333"
+    ],
+    "query_history": [
+      {
+        "query_id": "11111111-1111-4111-8111-111111111111",
+        "query_text": "Which industrial options over 30k SF under $25/SF look strongest for a logistics tenant?",
+        "route_mode": "hybrid",
+        "reason_codes": ["heuristic_router", "local_synthesis", "subjective_intent"],
+        "evidence_ids": ["22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"],
+        "evidence_count": 2,
+        "role": "answer",
+        "mode": "hybrid"
+      }
+    ],
+    "missing_signals": ["availability"],
+    "recommended_mcp_calls": [
+      {"tool": "rank_properties", "arguments": {"query_id": "11111111-1111-4111-8111-111111111111", "objective": "available soon", "filters": {"property_types": ["industrial"], "limit": 5}}}
+    ]
+  },
+  "follow_up": {
+    "parent_query_id": "11111111-1111-4111-8111-111111111111",
+    "requested_mode": "auto",
+    "resolution": "new_bundle_needed",
+    "coverage": {
+      "is_sufficient": false,
+      "needs_expansion": false,
+      "missing_signals": ["availability"],
+      "confidence": "0.5000",
+      "evidence_count": 2
+    }
+  },
+  "follow_up_suggestion_context": {
+    "allowed_kinds": ["average_rent", "availability_before_q3", "conflict_review", "largest_options", "price_spread"],
+    "display_limit": 5,
+    "unanswered_suggestions": [
+      {
+        "id": "cached-price-spread",
+        "kind": "price_spread",
+        "question": "What's the rent spread in this set?",
+        "source": "toolhouse_answer",
+        "generated_by_query_id": "11111111-1111-4111-8111-111111111111",
+        "generated_at": "2026-05-19T12:00:00+00:00"
+      }
+    ]
+  },
+  "suggest_followups_request_example": {
+    "task": "suggest_followups",
+    "allowed_kinds": ["average_rent", "availability_before_q3", "conflict_review", "largest_options", "price_spread"],
+    "expected_output": {
+      "suggested_followups": [
+        {"kind": "average_rent", "question": "What's the average rent for these?"},
+        {"kind": "availability_before_q3", "question": "Which have availability before Q3 2026?"},
+        {"kind": "conflict_review", "question": "Show me conflicts in this set"},
+        {"kind": "price_spread", "question": "What's the rent spread in this set?"}
+      ]
+    }
+  },
   "instructions": "Use CRE Backend MCP first. Return only the JSON object required by the CRE MCP Look Deeper Analyst output contract. Do not post to Slack."
 }

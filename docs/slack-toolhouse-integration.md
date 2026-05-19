@@ -69,7 +69,7 @@ Use Toolhouse for deeper agent behavior:
 
 This keeps the prototype Toolhouse-native without making the core data pipeline depend on agent reliability.
 
-Do not run both Slack Bolt and Toolhouse as competing Slack-facing agents in the MVP. Slack Bolt should own event intake and deterministic replies. Toolhouse should appear through `Look deeper` or a single deeper query path such as `/force-agent`.
+Do not run both Slack Bolt and Toolhouse as competing Slack-facing agents in the MVP. Slack Bolt should own event intake, deterministic replies, and modal handling. Toolhouse should appear through `Look deeper`, the `Follow Up with Agent ⚡` modal when Auto or Agent routing escalates, or a power-user path such as `/force-agent`.
 
 ## Slack App Configuration
 
@@ -81,7 +81,7 @@ Subscribe only to events needed for the demo:
 - `message.channels` for public-channel ingestion;
 - `message.groups` if private-channel ingestion is needed;
 - `file_created` or `file_shared` for file intake;
-- interactive actions for `Look deeper` and `Show sources` buttons.
+- interactive actions for `Show sources`, `Look deeper`, and `Follow Up with Agent ⚡` buttons.
 
 ### Recommended Scopes
 
@@ -97,7 +97,7 @@ Exact scopes depend on bot versus user-token choices, but the app will likely ne
 
 For a demo workspace, prefer one public channel to reduce permission friction.
 
-Message shortcuts do not require a separate OAuth scope, but they do require Interactivity to stay enabled and a message shortcut callback configured in Slack. The current backend callback ID is `force_agent_message_shortcut`.
+Message shortcuts do not require a separate OAuth scope, but they do require Interactivity to stay enabled and a message shortcut callback configured in Slack. The preferred backend callback ID is `follow_up_agent_message_shortcut`; the older `force_agent_message_shortcut` callback is still accepted and opens the same follow-up modal.
 
 ## Historical Backfill Plan
 
@@ -160,7 +160,7 @@ File metadata and content should be separated:
 2. Backend receives the event and queues query handling.
 3. Router selects instant or hybrid mode.
 4. Backend posts a threaded answer with sources.
-5. The message includes buttons for `Show sources`, `Look deeper`, and `Force agent` when useful.
+5. The message includes buttons for `Show sources`, `Look deeper`, and `Follow Up with Agent ⚡` when useful.
 
 ### Look Deeper
 
@@ -169,13 +169,28 @@ File metadata and content should be separated:
 3. Toolhouse worker receives the grounded context and may call backend tools for schema guidance, source detail, aggregation, chunk search, proximity, and controlled evidence expansion.
 4. Backend updates the existing thread with the expanded answer.
 
+### Follow Up With Agent
+
+1. User clicks `Follow Up with Agent ⚡` or uses the `follow_up_agent_message_shortcut` message shortcut.
+2. Slack opens a modal through `views_open` immediately from the interactivity handler. The modal carries `parent_query_id`, channel, and thread metadata in `private_metadata`.
+3. The modal uses a radio group for `Instant`, default `Auto`, and `Agent`, plus one radio group for the follow-up choice: either a prevalidated suggestion or `Custom question`.
+4. The backend first displays still-relevant unanswered suggestions cached from prior Toolhouse answer runs.
+5. If the cache is empty, the modal button reads `Generate suggestions`; clicking it sends Toolhouse a lightweight `task=suggest_followups` request for question wording only.
+6. If cached suggestions already exist, the button reads `Refresh suggestions`; clicking it sends the same lightweight request and merges the result with still-unanswered options.
+7. If the user selects a suggestion, backend ignores the mode radio selection and queues an instant `follow_up` job backed by stored evidence IDs and an allowlisted SQL template.
+8. If the user selects `Custom question`, backend validates that no suggestion was also selected, then queues a custom `follow_up` job in the chosen mode.
+9. Backend loads the Postgres `ThreadSession` for `channel_id + thread_ts` and accumulates backend-minted evidence IDs plus query history after every answer.
+10. Toolhouse answer tasks see `follow_up_suggestion_context.unanswered_suggestions`, return 0-5 next `{kind, question}` options when useful, and let the backend merge those into the cached suggestion bank.
+11. `Instant` skips coverage and uses local structured retrieval. `Agent` skips coverage and sends Toolhouse the accumulated bundle. `Auto` checks evidence coverage: reuse if sufficient, expand locally for recoverable missing signals, or escalate to Toolhouse with prior evidence IDs, missing signals, history, and recommended MCP calls.
+12. Backend validates Toolhouse citations before updating the thread.
+
 ### Force Agent
 
-1. User sends `/force-agent <question>`, mentions the bot with a `/force-agent` prefix, clicks `Force agent`, or uses the `force_agent_message_shortcut` message shortcut.
+1. User sends `/force-agent <question>` or mentions the bot with a `/force-agent` prefix.
 2. Backend skips the local instant router, creates a replayable query package, and queues Toolhouse directly.
 3. Toolhouse starts from `explain_evidence(query_id)` plus Slack context, then broadens through backend MCP tools as needed.
 4. Backend still validates citations and posts the final answer in-channel or in-thread depending on the original Slack surface.
-5. For contextual thread replies such as pronoun-heavy follow-ups with low router confidence, the backend can auto-promote the reply into this same force-agent path without requiring a manual prefix.
+5. For contextual thread replies such as pronoun-heavy follow-ups, the backend now queues Auto follow-up routing first; Toolhouse is used when coverage says the accumulated thread evidence is not enough.
 
 ### Show Sources
 
@@ -249,5 +264,5 @@ The agent should receive evidence IDs and source summaries, then return a synthe
 | File download fails | Mark source as failed and expose retry command. |
 | Parser fails | Keep source record, mark extraction status, and still index any recoverable text. |
 | Qdrant unavailable | Answer structured queries from PostgreSQL and label semantic search as unavailable internally. |
-| Toolhouse unavailable | Keep instant and hybrid answers working; hide or disable `Look deeper` and `/force-agent`. |
+| Toolhouse unavailable | Keep instant, hybrid, and local follow-up answers working; hide or disable `Look deeper`, `Agent` follow-up, and `/force-agent`. |
 | Rate limited | Pause the affected method/workspace and resume from checkpoint. |

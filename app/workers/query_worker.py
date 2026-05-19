@@ -6,7 +6,9 @@ from uuid import UUID
 
 from sqlalchemy import select
 
+from app.answering.follow_up_service import resolve_follow_up_request
 from app.answering.query_service import answer_query, create_force_agent_query
+from app.answering.thread_sessions import record_query_in_thread_session
 from app.db.session import SessionFactory
 from app.ingestion.slack_ingestor import INGEST_JOB_TYPES, process_slack_ingestion_job
 from app.models import IngestionJob
@@ -43,7 +45,7 @@ async def _claim_query_job_ids(limit: int) -> list[UUID]:
             result = await session.execute(
                 select(IngestionJob)
                 .where(
-                    IngestionJob.job_type.in_(["answer_query", "look_deeper", "force_agent", *sorted(INGEST_JOB_TYPES)]),
+                    IngestionJob.job_type.in_(["answer_query", "look_deeper", "force_agent", "follow_up", *sorted(INGEST_JOB_TYPES)]),
                     IngestionJob.status == "queued",
                 )
                 .order_by(IngestionJob.created_at)
@@ -110,7 +112,7 @@ async def process_pending_query_jobs(slack_gateway: SlackGateway | None = None, 
                 checkpoint = dict(job.checkpoint_json)
 
             pending_message_ts = str(checkpoint.get("pending_message_ts") or "")
-            if slack_gateway is not None and job_type in {"answer_query", "look_deeper", "force_agent"}:
+            if slack_gateway is not None and job_type in {"answer_query", "look_deeper", "force_agent", "follow_up"}:
                 channel_id = str(checkpoint.get("channel_id") or "")
                 thread_ts = _thread_ts_for_checkpoint(checkpoint)
                 if channel_id and thread_ts and not pending_message_ts:
@@ -158,6 +160,59 @@ async def process_pending_query_jobs(slack_gateway: SlackGateway | None = None, 
                     "imported_source_count": ingestion_payload.get("imported_source_count"),
                     "imported_chunk_count": ingestion_payload.get("imported_chunk_count"),
                     "imported_property_record_count": ingestion_payload.get("imported_property_record_count"),
+                }
+            elif job_type == "follow_up":
+                follow_up_payload = await resolve_follow_up_request(
+                    query_text=str(checkpoint.get("query_text") or ""),
+                    mode=str(checkpoint.get("mode") or "auto"),
+                    parent_query_id=str(checkpoint.get("parent_query_id") or "") or None,
+                    slack_channel_id=str(checkpoint.get("channel_id") or ""),
+                    slack_user_id=str(checkpoint.get("user_id") or "") or None,
+                    slack_ts=str(checkpoint.get("query_ts") or "") or None,
+                    slack_thread_ts=_thread_ts_for_checkpoint(checkpoint),
+                    suggested_follow_up=dict(checkpoint.get("suggested_follow_up") or {}),
+                )
+                delivery_payload = {"delivery_status": "prepared"}
+                if slack_gateway is not None:
+                    channel_id = str(checkpoint.get("channel_id") or "")
+                    thread_ts = _thread_ts_for_checkpoint(checkpoint)
+                    formatted_text = build_slack_reply_text(follow_up_payload)
+                    blocks = (
+                        build_deeper_review_blocks(follow_up_payload)
+                        if follow_up_payload.get("answer_mode") == "agent_mode"
+                        else build_answer_blocks(follow_up_payload)
+                    )
+                    if channel_id and pending_message_ts:
+                        response = await slack_gateway.update_message(
+                            channel_id=channel_id,
+                            message_ts=pending_message_ts,
+                            text=formatted_text,
+                            blocks=blocks,
+                        )
+                    else:
+                        response = await slack_gateway.post_thread_reply(
+                            channel_id=channel_id,
+                            thread_ts=thread_ts,
+                            text=formatted_text,
+                            blocks=blocks,
+                        )
+                    delivery_payload = {
+                        "delivery_status": "posted",
+                        "delivery_ts": response.get("ts"),
+                    }
+                updates = {
+                    **delivery_payload,
+                    "query_id": follow_up_payload["query_id"],
+                    "answer_mode": follow_up_payload.get("answer_mode"),
+                    "answer_status": follow_up_payload.get("status"),
+                    "pending_message_ts": pending_message_ts or None,
+                    "route_mode": follow_up_payload.get("route_mode"),
+                    "answer_snapshot_id": follow_up_payload.get("answer_snapshot_id"),
+                    "follow_up": follow_up_payload.get("follow_up"),
+                    "validation": follow_up_payload.get("validation"),
+                    "toolhouse_agent_id": follow_up_payload.get("toolhouse_agent_id"),
+                    "toolhouse_run_id": follow_up_payload.get("toolhouse_run_id"),
+                    "toolhouse_fallback": follow_up_payload.get("toolhouse_fallback", False),
                 }
             elif job_type in {"look_deeper", "force_agent"}:
                 if job_type == "force_agent":
@@ -226,6 +281,13 @@ async def process_pending_query_jobs(slack_gateway: SlackGateway | None = None, 
                             "force_agent_answer_snapshot_id": force_query_payload.get("answer_snapshot_id"),
                         }
                     )
+                await record_query_in_thread_session(
+                    str(deeper_payload["query_id"]),
+                    slack_channel_id=str(checkpoint.get("channel_id") or "") or None,
+                    slack_thread_ts=_thread_ts_for_checkpoint(checkpoint) or None,
+                    role="force_agent" if job_type == "force_agent" else "look_deeper",
+                    mode=job_type,
+                )
             else:
                 answer_payload = await answer_query(
                     str(checkpoint.get("query_text") or ""),
@@ -268,10 +330,17 @@ async def process_pending_query_jobs(slack_gateway: SlackGateway | None = None, 
                     "route_mode": answer_payload.get("route_mode"),
                     "answer_snapshot_id": answer_payload["answer_snapshot_id"],
                 }
+                await record_query_in_thread_session(
+                    str(answer_payload["query_id"]),
+                    slack_channel_id=str(checkpoint.get("channel_id") or "") or None,
+                    slack_thread_ts=_thread_ts_for_checkpoint(checkpoint) or None,
+                    role="answer",
+                    mode=str(answer_payload.get("route_mode") or "instant"),
+                )
             await _complete_job(job_id, updates)
             processed.append({"job_id": str(job_id), "job_type": job_type, **updates})
         except Exception as exc:  # noqa: BLE001
-            if slack_gateway is not None and checkpoint and job_type in {"answer_query", "look_deeper", "force_agent"}:
+            if slack_gateway is not None and checkpoint and job_type in {"answer_query", "look_deeper", "force_agent", "follow_up"}:
                 channel_id = str(checkpoint.get("channel_id") or "")
                 thread_ts = _thread_ts_for_checkpoint(checkpoint)
                 pending_message_ts = str(checkpoint.get("pending_message_ts") or "")

@@ -11,6 +11,7 @@ from app.models.core import (
     SlackEvent,
     SlackSourcePost,
     SourceDocument,
+    ThreadSession,
 )
 
 __all__ = [
@@ -26,4 +27,5 @@ __all__ = [
     "SlackEvent",
     "SlackSourcePost",
     "SourceDocument",
+    "ThreadSession",
 ]

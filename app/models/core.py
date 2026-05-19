@@ -163,6 +163,23 @@ class Query(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ThreadSession(Base):
+    __tablename__ = "thread_sessions"
+    __table_args__ = (
+        UniqueConstraint("slack_channel_id", "slack_thread_ts", name="uq_thread_sessions_channel_thread"),
+        Index("ix_thread_sessions_channel_updated_at", "slack_channel_id", "updated_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    slack_channel_id: Mapped[str] = mapped_column(String(32))
+    slack_thread_ts: Mapped[str] = mapped_column(String(32))
+    accumulated_evidence_ids_json: Mapped[list[str]] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    query_history_json: Mapped[list[dict[str, object]]] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    session_context_json: Mapped[dict[str, object]] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class EvidenceItem(Base):
     __tablename__ = "evidence_items"
 

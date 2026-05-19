@@ -2,7 +2,7 @@
 
 Use this file as the safety and operating policy for the `CRE MCP Look Deeper Analyst` worker.
 
-The same policy applies when the backend sends `task=force_agent`: direct Toolhouse routing changes when the worker is invoked, not the evidence or citation boundary.
+The same policy applies when the backend sends `task=force_agent` or `task=follow_up_agent`: direct Toolhouse routing changes when the worker is invoked, not the evidence or citation boundary. `task=suggest_followups` is a separate modal-support task that returns only suggested question wording and never creates evidence or SQL authority. Answer tasks may also return modal-ready next follow-ups, but those suggestions still carry no evidence or SQL authority until the backend validates and wraps them.
 
 ## Highest-Level Rule
 
@@ -29,6 +29,7 @@ Toolhouse owns:
 - synthesis over evidence;
 - comparison and explanation;
 - gap detection;
+- suggested follow-up wording for allowed modal option kinds;
 - external-context caveats;
 - strict JSON output.
 
@@ -43,6 +44,12 @@ Toolhouse owns:
 
 For zero-evidence escalations, the worker may use read-only Slack history/search only to recover conversational context, such as what "this" or "it" refers to. Slack context is not citable by itself. Before answering a CRE fact, recover the likely property/source through CRE Backend MCP and mint or reuse backend evidence IDs for the current query.
 
+For `follow_up_agent`, `thread_session.query_history` and `prior_accumulated_evidence_ids` are context and routing hints. Verify IDs through current-run MCP output before citing. If coverage says the thread bundle is missing signals, use MCP tools to fill them or return `needs_more_evidence`.
+
+For `suggest_followups`, do not cite evidence and do not use the deeper-review output contract. Return only 3-5 allowed `{kind, question}` options. The backend attaches any prevalidated SQL template, evidence parameters, and modal IDs after your response.
+
+For answer-task `suggested_followups`, return only 0-5 allowed `{kind, question}` objects when useful. Review `follow_up_suggestion_context.unanswered_suggestions`, preserve still-relevant unanswered ideas, avoid duplicates, and do not include SQL, evidence IDs, modal IDs, or validation metadata.
+
 ## Hard No-Fabrication Rules
 
 Never invent:
@@ -56,6 +63,7 @@ Never invent:
 - source names;
 - Slack messages;
 - citations;
+- SQL templates or executable SQL;
 - tool results;
 - MCP availability.
 
@@ -128,6 +136,7 @@ Do not use Code Interpreter / Virtual Computer for:
 - persistent application state;
 - secret handling;
 - direct database access;
+- raw SQL execution for suggested follow-ups;
 - final CRE aggregations when an MCP aggregate tool is required.
 
 ## Output Status Rules
@@ -155,7 +164,7 @@ Current validated state:
 - The CRE Backend MCP server is mounted into the FastAPI app at `/toolhouse/mcp` and protected by `CRE_TOOLHOUSE_MCP_BEARER_TOKEN`.
 - Current audit status: `ready_for_bounded_agent`.
 - Current sample audit summary: 23 source documents, 25 structured property records, 0 sources without chunks, 6 sources with text but no extracted property rows, 6 local Slack-shaped message rows without source URLs before live permalink overlay, 1 explainable Harbor Rd conflict group.
-- Current full-suite validation: `uv run pytest -q` passes 100 tests with no known failures or warning noise.
+- Current full-suite validation: `uv run pytest -q` passes 118 tests with no known failures or warning noise.
 - Current focused Toolhouse validation after completing the backend tool surface, Workers API client, coordinator tools, and output-contract validation: `uv run pytest tests/test_toolhouse_client.py tests/test_toolhouse_tools.py tests/test_toolhouse_mcp_server.py -q` passes 20 tests.
 - Current live Toolhouse smoke: `uv run cre-cli toolhouse-smoke` returned `answered` with no fallback, 4 allowed evidence IDs, 4 cited evidence IDs, and no schema errors.
 - Graphify stats after rebuild: 767 nodes, 1345 edges, 56 communities.

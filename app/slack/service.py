@@ -9,6 +9,11 @@ from typing import Any
 
 from sqlalchemy import select
 
+from app.answering.follow_up_suggestions import (
+    generate_and_store_follow_up_suggestions,
+    load_follow_up_suggestion,
+    load_follow_up_suggestions,
+)
 from app.answering.query_service import explain_query
 from app.config import get_settings
 from app.db.session import SessionFactory
@@ -27,6 +32,17 @@ _CONTEXTUAL_THREAD_FOLLOW_UP_PHRASES = (
     "where is this located",
     "where is it located",
 )
+FOLLOW_UP_MODAL_CALLBACK_ID = "follow_up_agent_modal"
+FOLLOW_UP_MODAL_QUESTION_BLOCK_ID = "follow_up_question_block"
+FOLLOW_UP_MODAL_QUESTION_ACTION_ID = "follow_up_question"
+FOLLOW_UP_MODAL_MODE_BLOCK_ID = "follow_up_mode_block"
+FOLLOW_UP_MODAL_MODE_ACTION_ID = "follow_up_mode"
+FOLLOW_UP_MODAL_SUGGESTION_BLOCK_ID = "follow_up_suggestion_block"
+FOLLOW_UP_MODAL_SUGGESTION_ACTION_ID = "follow_up_suggestion"
+FOLLOW_UP_MODAL_REFRESH_BLOCK_ID = "follow_up_refresh_block"
+FOLLOW_UP_MODAL_REFRESH_ACTION_ID = "refresh_follow_up_suggestions"
+FOLLOW_UP_MODAL_CUSTOM_VALUE = "custom"
+FOLLOW_UP_MODAL_MODES = ("instant", "auto", "agent")
 
 
 def _utcnow() -> datetime:
@@ -95,7 +111,7 @@ def _extract_query_id_from_slack_message(message_payload: dict[str, Any]) -> str
         for element in block.get("elements") or []:
             if not isinstance(element, dict):
                 continue
-            if element.get("action_id") in {"show_sources", "look_deeper", "force_agent_query"}:
+            if element.get("action_id") in {"show_sources", "look_deeper", "force_agent_query", "open_follow_up_modal"}:
                 value = str(element.get("value") or "").strip()
                 if value:
                     return value
@@ -382,8 +398,7 @@ async def enqueue_app_mention_event(payload: dict[str, Any], headers: dict[str, 
                 query_text=routed_query_text,
                 is_thread_reply=bool(event.get("thread_ts")),
             )
-            if auto_force_agent_reason is not None:
-                force_agent = True
+            auto_follow_up = auto_force_agent_reason is not None
             thread_ts = str(event.get("thread_ts") or event.get("ts") or "")
             checkpoint_json = {
                 "slack_event_id": event_id,
@@ -395,13 +410,16 @@ async def enqueue_app_mention_event(payload: dict[str, Any], headers: dict[str, 
                 "query_text": routed_query_text,
                 "original_query_text": query_text,
                 "force_agent": force_agent,
+                "follow_up": auto_follow_up,
+                "mode": "auto" if auto_follow_up else "",
+                "parent_query_id": "",
                 "event_type": str(event.get("type") or ""),
             }
             if auto_force_agent_reason is not None:
-                checkpoint_json["force_agent_source"] = auto_force_agent_reason
-                checkpoint_json["force_agent_reason_codes"] = [auto_force_agent_reason]
+                checkpoint_json["follow_up_source"] = auto_force_agent_reason
+                checkpoint_json["follow_up_reason_codes"] = [auto_force_agent_reason]
             job = IngestionJob(
-                job_type="force_agent" if force_agent else "answer_query",
+                job_type="force_agent" if force_agent else "follow_up" if auto_follow_up else "answer_query",
                 status="queued",
                 attempt_count=0,
                 checkpoint_json=checkpoint_json,
@@ -452,6 +470,48 @@ async def enqueue_force_agent_request(
             session.add(job)
             await session.flush()
             return {"status": "queued", "job_id": str(job.id), "job_type": "force_agent"}
+
+
+async def enqueue_follow_up_request(
+    *,
+    query_text: str,
+    mode: str,
+    parent_query_id: str | None,
+    channel_id: str,
+    user_id: str,
+    team_id: str | None = None,
+    thread_ts: str | None = None,
+    query_ts: str | None = None,
+    source: str = "follow_up_modal",
+    suggested_follow_up: dict[str, object] | None = None,
+) -> dict[str, Any]:
+    normalized_query = " ".join(str(query_text or "").split())
+    normalized_mode = str(mode or "auto").strip().lower()
+    if normalized_mode not in {"instant", "auto", "agent"}:
+        normalized_mode = "auto"
+    async with SessionFactory() as session:
+        async with session.begin():
+            job = IngestionJob(
+                job_type="follow_up",
+                status="queued",
+                attempt_count=0,
+                checkpoint_json={
+                    "team_id": team_id or "",
+                    "channel_id": channel_id,
+                    "user_id": user_id,
+                    "thread_ts": thread_ts or query_ts or "",
+                    "query_ts": query_ts or "",
+                    "query_text": normalized_query,
+                    "original_query_text": normalized_query,
+                    "mode": normalized_mode,
+                    "parent_query_id": parent_query_id or "",
+                    "suggested_follow_up": suggested_follow_up or {},
+                    "event_type": source,
+                },
+            )
+            session.add(job)
+            await session.flush()
+            return {"status": "queued", "job_id": str(job.id), "job_type": "follow_up", "mode": normalized_mode}
 
 
 async def handle_force_agent_command(
@@ -552,8 +612,8 @@ def build_answer_blocks(answer_payload: dict[str, Any]) -> list[dict[str, Any]]:
         action_elements.append(
             {
                 "type": "button",
-                "action_id": "force_agent_query",
-                "text": {"type": "plain_text", "text": "Force agent"},
+                "action_id": "open_follow_up_modal",
+                "text": {"type": "plain_text", "text": "Follow Up with Agent ⚡", "emoji": True},
                 "value": str(query_id),
             }
         )
@@ -575,24 +635,39 @@ def build_deeper_review_blocks(deeper_payload: dict[str, Any]) -> list[dict[str,
     blocks.append(build_trust_receipt_block(deeper_payload))
     allowed_ids = list(((deeper_payload.get("escalation_payload") or {}).get("allowed_evidence_ids") or []))
     cited_ids = list(deeper_payload.get("cited_evidence_ids") or [])
-    if deeper_payload.get("query_id") and (allowed_ids or cited_ids):
+    query_id = deeper_payload.get("query_id")
+    action_elements: list[dict[str, Any]] = []
+    if query_id and (allowed_ids or cited_ids):
+        action_elements.append(
+            {
+                "type": "button",
+                "action_id": "show_sources",
+                "text": {"type": "plain_text", "text": "Show sources"},
+                "value": str(query_id),
+            }
+        )
+    if query_id:
+        action_elements.append(
+            {
+                "type": "button",
+                "action_id": "open_follow_up_modal",
+                "text": {"type": "plain_text", "text": "Follow Up with Agent ⚡", "emoji": True},
+                "value": str(query_id),
+            }
+        )
+    if action_elements:
         blocks.append(
             {
                 "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "action_id": "show_sources",
-                        "text": {"type": "plain_text", "text": "Show sources"},
-                        "value": str(deeper_payload["query_id"]),
-                    }
-                ],
+                "elements": action_elements,
             }
         )
     return blocks
 
 
 def build_pending_status_text(*, job_type: str) -> str:
+    if job_type == "follow_up":
+        return "_Mode: Follow-up - resolving thread context_\n\n_Checking the accumulated evidence bundle and routing mode._"
     if job_type == "force_agent":
         return "_Mode: Agent mode - force-agent direct Toolhouse pass_\n\n_Skipping the instant router and checking backend MCP context._"
     if job_type == "look_deeper":
@@ -610,6 +685,8 @@ def build_pending_status_blocks(*, job_type: str) -> list[dict[str, Any]]:
 
 
 def build_failed_status_text(*, job_type: str) -> str:
+    if job_type == "follow_up":
+        return "_Mode: Follow-up - processing failed_\n\nI could not finish that follow-up cleanly. Please retry from the follow-up button."
     if job_type == "force_agent":
         return "_Mode: Agent mode - force-agent review failed_\n\nI could not finish the direct Toolhouse review cleanly. Please retry `/force-agent <question>`."
     if job_type == "look_deeper":
@@ -713,6 +790,360 @@ async def handle_look_deeper_action(
     return {"status": "queued", "job_id": job_id, "query_id": query_id}
 
 
+def _normalized_follow_up_mode(mode: object) -> str:
+    normalized = str(mode or "").lower().strip()
+    return normalized if normalized in FOLLOW_UP_MODAL_MODES else "auto"
+
+
+def _follow_up_mode_option(mode: str) -> dict[str, object]:
+    label = {"instant": "Instant", "auto": "Auto", "agent": "Agent"}[mode]
+    descriptions = {
+        "instant": "Use current thread evidence only",
+        "auto": "Reuse or escalate based on coverage",
+        "agent": "Send this follow-up to Toolhouse",
+    }
+    return {
+        "text": {"type": "plain_text", "text": label},
+        "description": {"type": "plain_text", "text": descriptions[mode]},
+        "value": mode,
+    }
+
+
+def _follow_up_suggestion_option(suggestion: dict[str, object]) -> dict[str, object]:
+    question = " ".join(str(suggestion.get("question") or "Suggested follow-up").split())[:74]
+    return {
+        "text": {"type": "plain_text", "text": question},
+        "description": {"type": "plain_text", "text": "Instant, prevalidated SQL"},
+        "value": str(suggestion.get("id") or ""),
+    }
+
+
+def _custom_follow_up_option() -> dict[str, object]:
+    return {
+        "text": {"type": "plain_text", "text": "Custom question"},
+        "description": {"type": "plain_text", "text": "Use the text box below"},
+        "value": FOLLOW_UP_MODAL_CUSTOM_VALUE,
+    }
+
+
+def _follow_up_choice_block(suggestions: list[dict[str, object]] | None) -> dict[str, Any]:
+    options = [_follow_up_suggestion_option(suggestion) for suggestion in (suggestions or [])[:5]]
+    custom_option = _custom_follow_up_option()
+    options.append(custom_option)
+    return {
+        "type": "input",
+        "block_id": FOLLOW_UP_MODAL_SUGGESTION_BLOCK_ID,
+        "label": {"type": "plain_text", "text": "Choose one follow-up"},
+        "element": {
+            "type": "radio_buttons",
+            "action_id": FOLLOW_UP_MODAL_SUGGESTION_ACTION_ID,
+            "initial_option": custom_option,
+            "options": options,
+        },
+    }
+
+
+def _modal_has_prevalidated_suggestions(view: dict[str, Any]) -> bool:
+    for block in list(view.get("blocks") or []):
+        if not isinstance(block, dict) or block.get("block_id") != FOLLOW_UP_MODAL_SUGGESTION_BLOCK_ID:
+            continue
+        element = block.get("element") if isinstance(block.get("element"), dict) else {}
+        options = element.get("options") if isinstance(element.get("options"), list) else []
+        return any(isinstance(option, dict) and option.get("value") != FOLLOW_UP_MODAL_CUSTOM_VALUE for option in options)
+    return False
+
+
+def build_follow_up_modal(
+    *,
+    private_metadata: dict[str, object],
+    suggestions: list[dict[str, object]] | None = None,
+    suggestions_loading: bool = False,
+    selected_mode: str | None = None,
+) -> dict[str, Any]:
+    mode = _normalized_follow_up_mode(selected_mode or private_metadata.get("mode") or "auto")
+    has_suggestions = bool(suggestions) or bool(private_metadata.get("has_follow_up_suggestions"))
+    metadata = {**private_metadata, "mode": mode, "has_follow_up_suggestions": has_suggestions}
+    mode_options = [_follow_up_mode_option(candidate) for candidate in FOLLOW_UP_MODAL_MODES]
+    initial_mode_option = next(option for option in mode_options if option["value"] == mode)
+    suggestion_blocks: list[dict[str, Any]] = []
+    if suggestions_loading:
+        suggestion_blocks.append(
+            {
+                "type": "section",
+                "block_id": "follow_up_suggestions_loading_block",
+                "text": {"type": "mrkdwn", "text": "*Suggested follow-ups*\nGenerating prevalidated instant options..."},
+            }
+        )
+        suggestion_blocks.append(_follow_up_choice_block([]))
+    elif suggestions:
+        suggestion_blocks.append(_follow_up_choice_block(suggestions))
+    else:
+        suggestion_blocks.append(
+            {
+                "type": "section",
+                "block_id": "follow_up_suggestions_empty_block",
+                "text": {"type": "mrkdwn", "text": "*Suggested follow-ups*\nNo prevalidated suggestions are available for this evidence bundle yet."},
+            }
+        )
+        suggestion_blocks.append(_follow_up_choice_block([]))
+
+    return {
+        "type": "modal",
+        "callback_id": FOLLOW_UP_MODAL_CALLBACK_ID,
+        "title": {"type": "plain_text", "text": "Follow Up"},
+        "submit": {"type": "plain_text", "text": "Ask"},
+        "close": {"type": "plain_text", "text": "Cancel"},
+        "private_metadata": json.dumps(metadata, sort_keys=True),
+        "blocks": [
+            {
+                "type": "input",
+                "block_id": FOLLOW_UP_MODAL_MODE_BLOCK_ID,
+                "label": {"type": "plain_text", "text": "Mode"},
+                "element": {
+                    "type": "radio_buttons",
+                    "action_id": FOLLOW_UP_MODAL_MODE_ACTION_ID,
+                    "initial_option": initial_mode_option,
+                    "options": mode_options,
+                },
+            },
+            *suggestion_blocks,
+            {
+                "type": "actions",
+                "block_id": FOLLOW_UP_MODAL_REFRESH_BLOCK_ID,
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Refresh suggestions" if has_suggestions else "Generate suggestions"},
+                        "action_id": FOLLOW_UP_MODAL_REFRESH_ACTION_ID,
+                        "value": "refresh" if has_suggestions else "generate",
+                    }
+                ],
+            },
+            {
+                "type": "input",
+                "block_id": FOLLOW_UP_MODAL_QUESTION_BLOCK_ID,
+                "label": {"type": "plain_text", "text": "Custom question"},
+                "optional": True,
+                "element": {
+                    "type": "plain_text_input",
+                    "action_id": FOLLOW_UP_MODAL_QUESTION_ACTION_ID,
+                    "multiline": True,
+                    "placeholder": {"type": "plain_text", "text": "Use this only when Custom question is selected"},
+                },
+            },
+        ],
+    }
+
+
+async def _open_follow_up_modal_with_suggestions(
+    *,
+    trigger_id: str,
+    metadata: dict[str, object],
+    slack_gateway: SlackGateway,
+) -> dict[str, Any]:
+    channel_id = str(metadata.get("channel_id") or "")
+    thread_ts = str(metadata.get("thread_ts") or metadata.get("parent_message_ts") or "")
+    suggestions = await load_follow_up_suggestions(slack_channel_id=channel_id, slack_thread_ts=thread_ts) if channel_id and thread_ts else []
+    metadata = {**metadata, "has_follow_up_suggestions": bool(suggestions)}
+    open_response = await slack_gateway.open_modal(
+        trigger_id=trigger_id,
+        view=build_follow_up_modal(private_metadata=metadata, suggestions=suggestions),
+    )
+    return {"open_response": open_response, "suggestions": suggestions}
+
+
+async def handle_open_follow_up_modal_action(
+    *,
+    query_id: str,
+    channel_id: str,
+    user_id: str,
+    team_id: str | None,
+    thread_ts: str,
+    trigger_id: str,
+    slack_gateway: SlackGateway,
+) -> dict[str, Any]:
+    explain_payload = await explain_query(query_id)
+    slack_context = dict(explain_payload.get("slack_context") or {})
+    effective_thread_ts = thread_ts or str(slack_context.get("thread_ts") or slack_context.get("message_ts") or "")
+    metadata = {
+        "parent_query_id": query_id,
+        "channel_id": channel_id or slack_context.get("channel_id") or "",
+        "user_id": user_id,
+        "team_id": team_id or "",
+        "thread_ts": effective_thread_ts,
+        "parent_message_ts": str(slack_context.get("message_ts") or ""),
+    }
+    suggestion_payload = await _open_follow_up_modal_with_suggestions(
+        trigger_id=trigger_id,
+        metadata=metadata,
+        slack_gateway=slack_gateway,
+    )
+    return {
+        "status": "modal_opened",
+        "query_id": query_id,
+        "thread_ts": effective_thread_ts,
+        "suggestion_count": len(suggestion_payload["suggestions"]),
+    }
+
+
+def _modal_state_value(view: dict[str, Any], block_id: str, action_id: str) -> dict[str, Any]:
+    values = dict(((view.get("state") or {}).get("values") or {}))
+    block = values.get(block_id) if isinstance(values.get(block_id), dict) else {}
+    value = block.get(action_id) if isinstance(block.get(action_id), dict) else {}
+    return dict(value)
+
+
+def _modal_private_metadata(view: dict[str, Any]) -> dict[str, Any]:
+    try:
+        metadata = json.loads(str(view.get("private_metadata") or "{}"))
+    except json.JSONDecodeError:
+        return {}
+    return dict(metadata) if isinstance(metadata, dict) else {}
+
+
+def _selected_follow_up_choice(view: dict[str, Any]) -> str:
+    choice_value = _modal_state_value(view, FOLLOW_UP_MODAL_SUGGESTION_BLOCK_ID, FOLLOW_UP_MODAL_SUGGESTION_ACTION_ID)
+    selected_option = choice_value.get("selected_option") if isinstance(choice_value.get("selected_option"), dict) else {}
+    return str(selected_option.get("value") or "")
+
+
+def _selected_follow_up_mode(view: dict[str, Any]) -> str:
+    mode_value = _modal_state_value(view, FOLLOW_UP_MODAL_MODE_BLOCK_ID, FOLLOW_UP_MODAL_MODE_ACTION_ID)
+    selected_option = mode_value.get("selected_option") if isinstance(mode_value.get("selected_option"), dict) else {}
+    return _normalized_follow_up_mode(selected_option.get("value") or _modal_private_metadata(view).get("mode") or "auto")
+
+
+def validate_follow_up_modal_submission(view: dict[str, Any]) -> dict[str, str]:
+    question_value = _modal_state_value(view, FOLLOW_UP_MODAL_QUESTION_BLOCK_ID, FOLLOW_UP_MODAL_QUESTION_ACTION_ID)
+    query_text = " ".join(str(question_value.get("value") or "").split())
+    choice = _selected_follow_up_choice(view)
+    selected_suggestion_id = "" if choice == FOLLOW_UP_MODAL_CUSTOM_VALUE else choice
+
+    if selected_suggestion_id and query_text:
+        return {FOLLOW_UP_MODAL_QUESTION_BLOCK_ID: "Clear this field or select Custom question."}
+    if not selected_suggestion_id and not query_text:
+        return {FOLLOW_UP_MODAL_QUESTION_BLOCK_ID: "Type a custom question, or choose a suggested follow-up."}
+    return {}
+
+
+async def handle_refresh_follow_up_suggestions_action(
+    *,
+    view: dict[str, Any],
+    slack_gateway: SlackGateway,
+) -> dict[str, Any]:
+    metadata = _modal_private_metadata(view)
+    mode = _selected_follow_up_mode(view)
+    had_suggestions = _modal_has_prevalidated_suggestions(view)
+    metadata["mode"] = mode
+    metadata["has_follow_up_suggestions"] = had_suggestions
+    channel_id = str(metadata.get("channel_id") or "")
+    thread_ts = str(metadata.get("thread_ts") or metadata.get("parent_message_ts") or "")
+    view_id = str(view.get("id") or "")
+    if not view_id:
+        return {"status": "missing_view", "mode": mode}
+    await slack_gateway.update_modal(
+        view_id=view_id,
+        view_hash=str(view.get("hash") or "") or None,
+        view=build_follow_up_modal(private_metadata=metadata, suggestions_loading=True, selected_mode=mode),
+    )
+    suggestions = (
+        await generate_and_store_follow_up_suggestions(
+            parent_query_id=str(metadata.get("parent_query_id") or "") or None,
+            slack_channel_id=channel_id,
+            slack_thread_ts=thread_ts,
+            force_refresh=True,
+        )
+        if channel_id and thread_ts
+        else []
+    )
+    metadata["has_follow_up_suggestions"] = bool(suggestions)
+    await slack_gateway.update_modal(
+        view_id=view_id,
+        view_hash=None,
+        view=build_follow_up_modal(
+            private_metadata=metadata,
+            suggestions=suggestions,
+            selected_mode=mode,
+        ),
+    )
+    return {
+        "status": "suggestions_refreshed" if had_suggestions else "suggestions_generated",
+        "mode": mode,
+        "suggestion_count": len(suggestions),
+    }
+
+
+async def handle_follow_up_modal_submission(
+    *,
+    view: dict[str, Any],
+    user_id: str,
+    team_id: str | None,
+    slack_gateway: SlackGateway,
+) -> dict[str, Any]:
+    metadata = _modal_private_metadata(view)
+
+    question_value = _modal_state_value(view, FOLLOW_UP_MODAL_QUESTION_BLOCK_ID, FOLLOW_UP_MODAL_QUESTION_ACTION_ID)
+    query_text = " ".join(str(question_value.get("value") or "").split())
+    mode = _selected_follow_up_mode(view)
+    choice = _selected_follow_up_choice(view)
+    selected_suggestion_id = "" if choice == FOLLOW_UP_MODAL_CUSTOM_VALUE else choice
+    channel_id = str(metadata.get("channel_id") or "")
+    thread_ts = str(metadata.get("thread_ts") or metadata.get("parent_message_ts") or "")
+    suggested_follow_up: dict[str, object] | None = None
+
+    if selected_suggestion_id and query_text:
+        await slack_gateway.post_ephemeral(
+            channel_id=channel_id,
+            user_id=user_id,
+            thread_ts=thread_ts or None,
+            text="Choose either a suggested follow-up or Custom question before sending.",
+        )
+        return {"status": "conflicting_query", "job_type": "follow_up"}
+
+    if not query_text and selected_suggestion_id:
+        suggested_follow_up = await load_follow_up_suggestion(
+            slack_channel_id=channel_id,
+            slack_thread_ts=thread_ts,
+            suggestion_id=selected_suggestion_id,
+        )
+        if suggested_follow_up is not None:
+            query_text = " ".join(str(suggested_follow_up.get("question") or "").split())
+            mode = "instant"
+
+    if not query_text:
+        await slack_gateway.post_ephemeral(
+            channel_id=channel_id,
+            user_id=user_id,
+            thread_ts=thread_ts or None,
+            text="Choose a suggested follow-up or type a question before sending.",
+        )
+        return {"status": "missing_query", "job_type": "follow_up"}
+
+    payload = await enqueue_follow_up_request(
+        query_text=query_text,
+        mode=mode,
+        parent_query_id=str(metadata.get("parent_query_id") or "") or None,
+        channel_id=channel_id,
+        user_id=user_id,
+        team_id=team_id or str(metadata.get("team_id") or "") or None,
+        thread_ts=thread_ts or None,
+        query_ts=None,
+        source="follow_up_suggestion" if suggested_follow_up is not None else "follow_up_modal",
+        suggested_follow_up=suggested_follow_up,
+    )
+    await slack_gateway.post_ephemeral(
+        channel_id=channel_id,
+        user_id=user_id,
+        thread_ts=thread_ts or None,
+        text=(
+            "On it. Suggested follow-up queued in Instant mode."
+            if suggested_follow_up is not None
+            else f"On it. Follow-up queued in {mode.title()} mode."
+        ),
+    )
+    return payload
+
+
 async def handle_force_agent_action(
     *,
     query_id: str,
@@ -760,17 +1191,30 @@ async def handle_force_agent_message_shortcut(
     user_id: str,
     team_id: str | None,
     slack_gateway: SlackGateway,
+    trigger_id: str | None = None,
 ) -> dict[str, Any]:
     shortcut_query_id = _extract_query_id_from_slack_message(message_payload)
     thread_ts = str(message_payload.get("thread_ts") or message_payload.get("ts") or "")
-    if shortcut_query_id:
-        return await handle_force_agent_action(
-            query_id=shortcut_query_id,
-            channel_id=channel_id,
-            user_id=user_id,
-            thread_ts=thread_ts,
+    if trigger_id:
+        metadata = {
+            "parent_query_id": shortcut_query_id or "",
+            "channel_id": channel_id,
+            "user_id": user_id,
+            "team_id": team_id or "",
+            "thread_ts": thread_ts,
+            "parent_message_ts": str(message_payload.get("ts") or ""),
+        }
+        suggestion_payload = await _open_follow_up_modal_with_suggestions(
+            trigger_id=trigger_id,
+            metadata=metadata,
             slack_gateway=slack_gateway,
         )
+        return {
+            "status": "modal_opened",
+            "query_id": shortcut_query_id,
+            "thread_ts": thread_ts,
+            "suggestion_count": len(suggestion_payload["suggestions"]),
+        }
 
     shortcut_text = _strip_bot_mention(str(message_payload.get("text") or ""))
     force_agent, routed_query_text = _parse_force_agent_text(shortcut_text)
@@ -787,6 +1231,7 @@ async def handle_force_agent_message_shortcut(
 
 
 __all__ = [
+    "FOLLOW_UP_MODAL_REFRESH_ACTION_ID",
     "build_deeper_review_blocks",
     "build_answer_blocks",
     "build_failed_status_blocks",
@@ -796,10 +1241,15 @@ __all__ = [
     "build_slack_reply_text",
     "build_show_sources_text",
     "enqueue_app_mention_event",
+    "enqueue_follow_up_request",
     "enqueue_force_agent_request",
+    "handle_follow_up_modal_submission",
+    "handle_refresh_follow_up_suggestions_action",
     "handle_force_agent_action",
     "handle_force_agent_command",
     "handle_force_agent_message_shortcut",
+    "handle_open_follow_up_modal_action",
     "handle_look_deeper_action",
     "handle_show_sources_action",
+    "validate_follow_up_modal_submission",
 ]

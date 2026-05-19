@@ -11,12 +11,17 @@ from app.config import get_settings
 from app.ingestion.slack_ingestor import enqueue_slack_ingestion_event
 from app.slack.gateway import get_slack_gateway
 from app.slack.service import (
+    FOLLOW_UP_MODAL_REFRESH_ACTION_ID,
     enqueue_app_mention_event,
+    handle_follow_up_modal_submission,
     handle_force_agent_action,
     handle_force_agent_command,
     handle_force_agent_message_shortcut,
     handle_look_deeper_action,
+    handle_open_follow_up_modal_action,
+    handle_refresh_follow_up_suggestions_action,
     handle_show_sources_action,
+    validate_follow_up_modal_submission,
 )
 
 _request_headers_var: ContextVar[dict[str, str]] = ContextVar("slack_request_headers", default={})
@@ -79,6 +84,19 @@ def get_slack_app() -> AsyncApp:
             slack_gateway=get_slack_gateway(),
         )
 
+    @slack_app.shortcut("follow_up_agent_message_shortcut")
+    async def handle_follow_up_shortcut(ack, body: dict[str, object]) -> None:
+        await ack()
+        message = body.get("message", {}) if isinstance(body.get("message"), dict) else {}
+        await handle_force_agent_message_shortcut(
+            message_payload=message,
+            channel_id=str(body.get("channel", {}).get("id") or ""),
+            user_id=str(body.get("user", {}).get("id") or ""),
+            team_id=str(body.get("team", {}).get("id") or body.get("team_id") or "") or None,
+            trigger_id=str(body.get("trigger_id") or "") or None,
+            slack_gateway=get_slack_gateway(),
+        )
+
     @slack_app.shortcut("force_agent_message_shortcut")
     async def handle_force_agent_shortcut(ack, body: dict[str, object]) -> None:
         await ack()
@@ -88,6 +106,7 @@ def get_slack_app() -> AsyncApp:
             channel_id=str(body.get("channel", {}).get("id") or ""),
             user_id=str(body.get("user", {}).get("id") or ""),
             team_id=str(body.get("team", {}).get("id") or body.get("team_id") or "") or None,
+            trigger_id=str(body.get("trigger_id") or "") or None,
             slack_gateway=get_slack_gateway(),
         )
 
@@ -115,6 +134,29 @@ def get_slack_app() -> AsyncApp:
             slack_gateway=get_slack_gateway(),
         )
 
+    @slack_app.action("open_follow_up_modal")
+    async def handle_open_follow_up(ack, body: dict[str, object], action: dict[str, object]) -> None:
+        await ack()
+        container = body.get("container", {}) if isinstance(body.get("container"), dict) else {}
+        await handle_open_follow_up_modal_action(
+            query_id=str(action.get("value") or ""),
+            channel_id=str(body.get("channel", {}).get("id") or ""),
+            user_id=str(body.get("user", {}).get("id") or ""),
+            team_id=str(body.get("team", {}).get("id") or body.get("team_id") or "") or None,
+            thread_ts=str(container.get("thread_ts") or container.get("message_ts") or ""),
+            trigger_id=str(body.get("trigger_id") or ""),
+            slack_gateway=get_slack_gateway(),
+        )
+
+    @slack_app.action(FOLLOW_UP_MODAL_REFRESH_ACTION_ID)
+    async def handle_refresh_follow_up_suggestions(ack, body: dict[str, object], action: dict[str, object]) -> None:
+        await ack()
+        view = body.get("view", {}) if isinstance(body.get("view"), dict) else {}
+        await handle_refresh_follow_up_suggestions_action(
+            view=view,
+            slack_gateway=get_slack_gateway(),
+        )
+
     @slack_app.action("force_agent_query")
     async def handle_force_agent_query(ack, body: dict[str, object], action: dict[str, object]) -> None:
         await ack()
@@ -124,6 +166,20 @@ def get_slack_app() -> AsyncApp:
             channel_id=str(body.get("channel", {}).get("id") or ""),
             user_id=str(body.get("user", {}).get("id") or ""),
             thread_ts=str(container.get("thread_ts") or container.get("message_ts") or ""),
+            slack_gateway=get_slack_gateway(),
+        )
+
+    @slack_app.view("follow_up_agent_modal")
+    async def handle_follow_up_view(ack, body: dict[str, object], view: dict[str, object]) -> None:
+        validation_errors = validate_follow_up_modal_submission(view)
+        if validation_errors:
+            await ack(response_action="errors", errors=validation_errors)
+            return
+        await ack()
+        await handle_follow_up_modal_submission(
+            view=view,
+            user_id=str(body.get("user", {}).get("id") or ""),
+            team_id=str(body.get("team", {}).get("id") or body.get("team_id") or "") or None,
             slack_gateway=get_slack_gateway(),
         )
 

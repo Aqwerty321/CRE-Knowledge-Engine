@@ -1197,12 +1197,14 @@ async def explain_query(query_id: str) -> dict[str, object]:
             }
 
         snapshot = await session.scalar(select(AnswerSnapshot).where(AnswerSnapshot.query_id == query_record.id))
+        snapshot_evidence_ids = list(snapshot.evidence_ids if snapshot is not None else [])
+        evidence_filter = EvidenceItem.id.in_(snapshot_evidence_ids) if snapshot_evidence_ids else EvidenceItem.query_id == query_record.id
         evidence_rows = await session.execute(
             select(EvidenceItem, SourceDocument, Chunk, PropertyRecord)
             .outerjoin(SourceDocument, EvidenceItem.document_id == SourceDocument.id)
             .outerjoin(Chunk, EvidenceItem.chunk_id == Chunk.id)
             .outerjoin(PropertyRecord, EvidenceItem.property_record_id == PropertyRecord.id)
-            .where(EvidenceItem.query_id == query_record.id)
+            .where(evidence_filter)
         )
 
         snapshot_evidence_order = {

@@ -10,11 +10,13 @@ Toolhouse should act as the deeper-analysis worker. The local backend remains th
 
 ## Date And Demo Context
 
-- Current readiness date: 2026-05-17.
+- Current readiness date: 2026-05-19.
 - Demo reference date for availability parsing: 2026-05-17.
 - Slack request mode: HTTP Events API / interactivity, not Socket Mode.
 - Slack `Look deeper` behavior: backend ACKs immediately, queues work, validates the agent response, then posts to the original thread.
 - Slack `/force-agent` behavior: backend queues Toolhouse directly, still persists a replayable query package, and validates citations before posting.
+- Slack `Follow Up with Agent ⚡` behavior: backend opens a modal immediately, persists `ThreadSession` state by channel/thread, displays cached suggestions when they exist, shows `Generate suggestions` when the cache is empty, and routes custom follow-ups through `Instant`, default `Auto`, or `Agent` mode radio buttons.
+- Suggested follow-up behavior: Toolhouse may generate allowed `{kind, question}` options during answer tasks or explicit `task=suggest_followups` generate/refresh actions; the backend preserves unanswered cached suggestions, attaches prevalidated SQL templates, marks selected suggestions answered, and runs selected suggestions in guaranteed `Instant` mode.
 
 ## MCP Server And Backend Tool Surface
 
@@ -76,6 +78,13 @@ Worker API behavior implemented locally:
 - returned run ID header: `X-Toolhouse-Run-ID`;
 - response body streams in chunks;
 - backend collects chunks, extracts the final strict JSON object, validates the output contract and citations, and posts only validated content.
+
+Toolhouse task modes now expected by the backend:
+
+- `look_deeper`: richer analysis over an existing backend answer.
+- `force_agent`: direct Toolhouse path that bypasses local instant routing but preserves backend citation validation.
+- `follow_up_agent`: custom follow-up that needs Toolhouse over accumulated `ThreadSession` evidence and coverage gaps.
+- `suggest_followups`: lightweight modal-support task that returns only 3-5 allowed `{kind, question}` objects; backend owns the attached SQL templates.
 
 ## Citation Readiness
 
@@ -143,7 +152,7 @@ uv run pytest -q
 
 Current result: tests pass with no known failures or warning noise.
 
-Latest full-suite count before coordinator pass: 100 tests passing.
+Latest full-suite count after ThreadSession, follow-up modal, suggested follow-up work, cached answer-task suggestions, refresh, and modal exclusivity updates: 118 tests passing.
 
 Latest focused Toolhouse/MCP count after coordinator pass: 20 tests passing.
 
@@ -195,3 +204,14 @@ The direct follow-up variant is:
 2. Backend skips the instant router but still creates a replayable query package.
 3. Toolhouse starts from backend MCP and Slack context.
 4. Backend validates citations and posts the result to Slack.
+
+The modal follow-up variant is:
+
+1. User clicks `Follow Up with Agent ⚡`.
+2. Backend opens the modal immediately and first uses still-relevant unanswered suggestions cached from previous Toolhouse answer runs.
+3. If no cache exists, the modal button reads `Generate suggestions`; clicking it forces a lightweight Toolhouse `suggest_followups` request for question wording only.
+4. If suggestions already exist, the button reads `Refresh suggestions`; clicking it forces a fresh `suggest_followups` pass while preserving unanswered cached options.
+5. Backend stores allowed suggestions in `ThreadSession` with backend-prevalidated SQL template metadata.
+6. If the user selects a suggestion, backend runs instant suggested follow-up resolution over current evidence IDs and marks that suggestion answered.
+7. If the user selects `Custom question`, backend runs the typed prompt through `Instant`, `Auto`, or `Agent`; Auto escalates to Toolhouse only when evidence coverage says the thread bundle is insufficient.
+8. Backend rejects ambiguous modal submissions that include both a selected suggestion and custom text.

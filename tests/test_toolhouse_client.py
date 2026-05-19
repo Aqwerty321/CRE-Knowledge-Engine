@@ -40,6 +40,8 @@ def test_build_toolhouse_message_preserves_query_package_shape() -> None:
     assert "return needs_more_evidence or external_context_only" in message
     assert "Keep rendered_answer terse and aligned with the backend instant-answer style" in message
     assert "comparison_table object" in message
+    assert "return suggested_followups as 0 to 5 short" in message
+    assert "Do not include SQL in suggested_followups" in message
 
 
 def test_build_toolhouse_message_marks_force_agent_task() -> None:
@@ -54,3 +56,30 @@ def test_build_toolhouse_message_marks_force_agent_task() -> None:
 
     assert '"task": "force_agent"' in message
     assert "the user intentionally bypassed instant routing" in message
+
+
+def test_build_toolhouse_message_marks_follow_up_agent_task() -> None:
+    message = build_toolhouse_message(
+        {
+            "status": "ready",
+            "query_id": "query-1",
+            "reason_codes": ["follow_up", "follow_up_agent", "new_bundle_needed"],
+            "allowed_evidence_ids": ["evidence-1"],
+            "thread_session": {
+                "prior_accumulated_evidence_ids": ["evidence-1"],
+                "missing_signals": ["location"],
+                "recommended_mcp_calls": ["cre_search_evidence"],
+            },
+            "follow_up_suggestion_context": {
+                "unanswered_suggestions": [
+                    {"kind": "price_spread", "question": "What's the rent spread for the current set?"}
+                ]
+            },
+        }
+    )
+
+    assert '"task": "follow_up_agent"' in message
+    assert "prior_accumulated_evidence_ids" in message
+    assert "recommended MCP calls" in message
+    assert "follow_up_suggestion_context" in message
+    assert "What's the rent spread for the current set?" in message

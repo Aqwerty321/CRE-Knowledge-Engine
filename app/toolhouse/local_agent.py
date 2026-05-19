@@ -32,6 +32,8 @@ ALLOWED_STATUSES = {
 
 ALLOWED_CONFIDENCE_LABELS = {"high", "medium", "low"}
 
+ALLOWED_FOLLOW_UP_KINDS = {"average_rent", "availability_before_q3", "conflict_review", "largest_options", "price_spread"}
+
 ALLOWED_MCP_TOOLS = {
     "describe_backend_schema",
     "expand_query_context",
@@ -110,6 +112,29 @@ def _validate_comparison_table(response_payload: dict[str, Any], schema_errors: 
             schema_errors.append(f"comparison_table.rows[{index}] must contain only non-empty strings")
 
 
+def _validate_followup_candidates(response_payload: dict[str, Any], field_name: str, schema_errors: list[str]) -> None:
+    values = response_payload.get(field_name)
+    if values is None:
+        return
+    if not isinstance(values, list):
+        schema_errors.append(f"{field_name} must be an array")
+        return
+    for index, value in enumerate(values):
+        if isinstance(value, str):
+            if not value.strip():
+                schema_errors.append(f"{field_name}[{index}] must not be empty")
+            continue
+        if not isinstance(value, dict):
+            schema_errors.append(f"{field_name}[{index}] must be a string or {{kind, question}} object")
+            continue
+        kind = value.get("kind")
+        question = value.get("question")
+        if kind not in ALLOWED_FOLLOW_UP_KINDS:
+            schema_errors.append(f"{field_name}[{index}].kind must be one of the allowed follow-up kinds")
+        if not isinstance(question, str) or not question.strip():
+            schema_errors.append(f"{field_name}[{index}].question must be a non-empty string")
+
+
 def validate_agent_response(
     *,
     allowed_evidence_ids: set[str],
@@ -131,6 +156,8 @@ def validate_agent_response(
     _string_value(response_payload, "rendered_answer", schema_errors)
     _string_value(response_payload, "reasoning_summary", schema_errors)
     _validate_comparison_table(response_payload, schema_errors)
+    _validate_followup_candidates(response_payload, "suggested_followups", schema_errors)
+    _validate_followup_candidates(response_payload, "next_followups", schema_errors)
 
     for field_name in LIST_FIELDS:
         _list_value(response_payload, field_name, schema_errors)
@@ -227,7 +254,7 @@ def _render_local_deeper_answer(explain_payload: dict[str, Any]) -> dict[str, An
             "external_sources_consulted": [],
             "unsupported_claims_dropped": ["Any stronger CRE claim was withheld because no backend evidence IDs were available."],
             "missing_data": ["Backend evidence for the query."],
-            "suggested_followups": ["Ingest or expose the missing source, then rerun Look deeper."],
+            "suggested_followups": [],
         }
 
     decision_summary = explain_payload.get("decision_summary") or {}
@@ -263,7 +290,10 @@ def _render_local_deeper_answer(explain_payload: dict[str, Any]) -> dict[str, An
         "external_sources_consulted": [],
         "unsupported_claims_dropped": [],
         "missing_data": [],
-        "suggested_followups": ["Use Toolhouse MCP for a richer multi-source comparison when live credentials are available."],
+        "suggested_followups": [
+            {"kind": "largest_options", "question": "Which are the largest options?"},
+            {"kind": "price_spread", "question": "What's the rent spread in this set?"},
+        ],
     }
 
 
@@ -279,6 +309,20 @@ async def build_escalation_payload(query_id: str) -> dict[str, Any]:
 
     allowed_evidence_ids = sorted(_allowed_evidence_ids(explain_payload))
     evidence_context = build_evidence_context(explain_payload, allowed_evidence_ids=allowed_evidence_ids)
+    filters = explain_payload.get("answer_snapshot", {}).get("filters", {})
+    thread_session = filters.get("thread_session") if isinstance(filters, dict) and isinstance(filters.get("thread_session"), dict) else None
+    follow_up = filters.get("follow_up") if isinstance(filters, dict) and isinstance(filters.get("follow_up"), dict) else None
+    slack_context = explain_payload.get("slack_context", {}) if isinstance(explain_payload.get("slack_context"), dict) else {}
+    suggestion_context: dict[str, Any] | None = None
+    suggestion_channel_id = str((thread_session or {}).get("slack_channel_id") or slack_context.get("channel_id") or "")
+    suggestion_thread_ts = str((thread_session or {}).get("slack_thread_ts") or slack_context.get("thread_ts") or slack_context.get("message_ts") or "")
+    if suggestion_channel_id and suggestion_thread_ts:
+        from app.answering.follow_up_suggestions import load_follow_up_suggestion_context
+
+        suggestion_context = await load_follow_up_suggestion_context(
+            slack_channel_id=suggestion_channel_id,
+            slack_thread_ts=suggestion_thread_ts,
+        )
     return {
         "status": "ready",
         "query_id": query_id,
@@ -286,12 +330,15 @@ async def build_escalation_payload(query_id: str) -> dict[str, Any]:
         "heuristic_result": explain_payload.get("answer_snapshot", {}).get("rendered_answer"),
         "route_mode": explain_payload.get("route_mode"),
         "reason_codes": explain_payload.get("reason_codes", []),
-        "filters": explain_payload.get("answer_snapshot", {}).get("filters", {}),
+        "filters": filters,
         "allowed_evidence_ids": allowed_evidence_ids,
         "evidence": explain_payload.get("evidence", []),
         "evidence_context": evidence_context,
         "backend_mcp_tools": evidence_context["available_backend_mcp_tools"],
-        "slack_context": explain_payload.get("slack_context", {}),
+        "slack_context": slack_context,
+        "thread_session": thread_session,
+        "follow_up": follow_up,
+        "follow_up_suggestion_context": suggestion_context,
         "decision_summary": explain_payload.get("decision_summary"),
         "explain_payload": explain_payload,
     }

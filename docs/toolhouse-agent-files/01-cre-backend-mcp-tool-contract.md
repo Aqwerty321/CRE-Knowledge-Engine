@@ -20,6 +20,7 @@ The Toolhouse worker owns:
 - deeper synthesis over backend evidence;
 - multi-source comparison;
 - plain-English risk and confidence explanation;
+- suggested follow-up wording for backend-prevalidated modal options, including answer-task next follow-ups cached for the next modal;
 - structured JSON output for backend validation.
 
 ## Server And Auth Expectations
@@ -153,9 +154,108 @@ Current local-only helper, useful for tests but not the real Toolhouse worker:
 
 Usage rule: follow `recommended_mcp_calls` unless the user question clearly needs a different backend lookup. The manifest is a navigation aid, not a replacement for cited evidence IDs.
 
+### Thread Session Context
+
+`task=follow_up_agent` packages may include persisted Slack thread state. This is conversation context, not direct citation authority.
+
+```json
+{
+  "thread_session": {
+    "thread_session_id": "uuid",
+    "slack_channel_id": "C123",
+    "slack_thread_ts": "1715782000.000200",
+    "prior_accumulated_evidence_ids": ["uuid"],
+    "query_history": [],
+    "missing_signals": ["market", "availability"],
+    "recommended_mcp_calls": []
+  },
+  "follow_up": {
+    "parent_query_id": "uuid",
+    "requested_mode": "auto | agent",
+    "resolution": "agent_override | new_bundle_needed",
+    "coverage": {
+      "is_sufficient": false,
+      "needs_expansion": false,
+      "missing_signals": ["market", "availability"],
+      "confidence": "0.2500",
+      "evidence_count": 2
+    }
+  },
+  "follow_up_suggestion_context": {
+    "allowed_kinds": ["average_rent", "availability_before_q3", "conflict_review", "largest_options", "price_spread"],
+    "display_limit": 5,
+    "unanswered_suggestions": [
+      {"id": "stable-short-id", "kind": "price_spread", "question": "What's the rent spread in this set?", "source": "toolhouse_answer"}
+    ]
+  }
+}
+```
+
+Use `query_history` to understand pronouns and sequence. Verify every factual claim through `explain_evidence`, `expand_query_context`, or another MCP tool before answering. Use `follow_up_suggestion_context.unanswered_suggestions` as modal-option memory only: keep relevant unanswered questions, avoid duplicates, and return 0-5 next `{kind, question}` objects in answer-task `suggested_followups` when useful.
+
+### Suggested Follow-Up Generation
+
+`task=suggest_followups` is a lightweight modal-support task. It is not a deeper answer and it does not require the full deeper-review output contract.
+
+Input:
+
+```json
+{
+  "task": "suggest_followups",
+  "context": {
+    "parent_query_id": "uuid",
+    "slack_channel_id": "C123",
+    "slack_thread_ts": "1715782000.000200",
+    "evidence_count": 3,
+    "query_history": []
+  },
+  "allowed_kinds": ["average_rent", "availability_before_q3", "conflict_review", "largest_options", "price_spread"]
+}
+```
+
+Output:
+
+```json
+{
+  "suggested_followups": [
+    {"kind": "average_rent", "question": "What's the average rent for these?"},
+    {"kind": "availability_before_q3", "question": "Which have availability before Q3 2026?"},
+    {"kind": "conflict_review", "question": "Show me conflicts in this set"},
+    {"kind": "price_spread", "question": "What's the rent spread in this set?"}
+  ]
+}
+```
+
+Only return allowed kinds. Do not include SQL. The backend attaches prevalidated SQL templates and evidence parameters after your response.
+
+### Backend-Attached Prevalidated Suggestion
+
+The Slack modal may show backend-owned records shaped like this:
+
+```json
+{
+  "id": "stable-short-id",
+  "kind": "average_rent",
+  "question": "What's the average rent for these?",
+  "mode": "instant",
+  "route_mode": "instant",
+  "sql_query": "SELECT AVG(pr.price_per_sq_ft) ... WHERE ei.id = ANY(:evidence_ids)",
+  "sql_params": {"evidence_ids": ["uuid"]},
+  "validation": {"status": "prevalidated", "executor": "backend_instant_template", "raw_sql_execution": false}
+}
+```
+
+This SQL is backend allowlisted template metadata. Toolhouse must not execute it, mutate it, or invent raw SQL.
+
 Empty-bundle rule: when `bundle_shape.evidence_count` is 0, `Look deeper` is still allowed. Use the recommended MCP calls to broaden safely: inspect schema/context, search properties and source chunks, use coordinator tools when they fit, and call `expand_query_evidence` before citing any newly discovered backend result. If Slack context is present for a follow-up question, read Slack history only to identify the antecedent, then verify and cite through CRE Backend MCP.
 
 Force-agent rule: when `task` is `force_agent`, the backend intentionally skipped local instant routing. Do not anchor on a missing or weak heuristic result. Start from `explain_evidence`, Slack context, and backend MCP broadening calls.
+
+Follow-up-agent rule: when `task` is `follow_up_agent`, start from `thread_session.query_history`, `thread_session.prior_accumulated_evidence_ids`, `follow_up.coverage.missing_signals`, and `thread_session.recommended_mcp_calls`. Reuse prior evidence when it covers the question, but cite only backend-allowed evidence IDs. If the missing signals need new backend facts, call MCP search/coordinator tools and expand evidence before citing.
+
+Suggested-followups rule: when `task` is `suggest_followups`, return only short `{kind, question}` objects from the provided allowed kinds. Do not answer the user's CRE question, do not cite evidence, do not include SQL, and do not use the deeper-review output schema.
+
+Answer-task next-followups rule: for `look_deeper`, `force_agent`, and `follow_up_agent`, return `suggested_followups` as 0-5 short `{kind, question}` objects when useful. The backend merges them with unanswered cached suggestions, marks selected suggestions answered, attaches backend-owned SQL templates, and selects the top 4-5 for the next modal. Do not include SQL, IDs, or evidence citations inside these suggestion objects.
 
 ## Tool Contracts
 

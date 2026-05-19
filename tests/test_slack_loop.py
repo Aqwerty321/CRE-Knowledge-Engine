@@ -17,16 +17,23 @@ from alembic.config import Config
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.answering.follow_up_suggestions import store_agent_follow_up_suggestions
 from app.answering.query_service import explain_query
 from app.config import get_settings
 from app.db.session import SessionFactory, engine
 from app.ingestion.sample_importer import import_sample_data
 from app.ingestion.slack_ingestor import backfill_slack_channel_history
 from app.main import create_app
-from app.models import AnswerSnapshot, Chunk, EvidenceItem, IngestionJob, PropertyRecord, Query, SlackEvent, SourceDocument
+from app.models import AnswerSnapshot, Chunk, EvidenceItem, IngestionJob, PropertyRecord, Query, SlackEvent, SourceDocument, ThreadSession
 from app.slack.gateway import RecordingSlackGateway
 from app.slack.runtime import get_slack_app, get_slack_handler
-from app.slack.service import build_answer_blocks, build_slack_reply_text
+from app.slack.service import (
+    FOLLOW_UP_MODAL_REFRESH_ACTION_ID,
+    build_answer_blocks,
+    build_slack_reply_text,
+    enqueue_follow_up_request,
+    validate_follow_up_modal_submission,
+)
 from app.workers import process_pending_query_jobs
 
 
@@ -65,7 +72,8 @@ async def _prepare_slack_database() -> None:
             await session.execute(delete(AnswerSnapshot))
             await session.execute(delete(EvidenceItem))
             await session.execute(delete(Query))
-            await session.execute(delete(IngestionJob).where(IngestionJob.job_type.in_(["answer_query", "look_deeper", "force_agent"])))
+            await session.execute(delete(ThreadSession))
+            await session.execute(delete(IngestionJob).where(IngestionJob.job_type.in_(["answer_query", "look_deeper", "force_agent", "follow_up"])))
             await session.execute(delete(SlackEvent))
 
 
@@ -133,6 +141,16 @@ async def _load_latest_job(job_type: str) -> IngestionJob | None:
             select(IngestionJob).where(IngestionJob.job_type == job_type).order_by(IngestionJob.created_at.desc()).limit(1)
         )
         return result.scalar_one_or_none()
+
+
+async def _load_thread_session(channel_id: str, thread_ts: str) -> ThreadSession | None:
+    async with SessionFactory() as session:
+        return await session.scalar(
+            select(ThreadSession).where(
+                ThreadSession.slack_channel_id == channel_id,
+                ThreadSession.slack_thread_ts == thread_ts,
+            )
+        )
 
 
 @pytest.fixture
@@ -228,9 +246,9 @@ def _unsupported_app_mention_payload(channel_id: str = "C_CRE_LISTINGS_DEMO") ->
     return payload
 
 
-def _auto_force_agent_thread_follow_up_payload(channel_id: str = "C_CRE_LISTINGS_DEMO") -> dict[str, object]:
+def _auto_thread_follow_up_payload(channel_id: str = "C_CRE_LISTINGS_DEMO") -> dict[str, object]:
     payload = _app_mention_payload(channel_id)
-    payload["event_id"] = "Ev_test_app_mention_auto_force_agent_1"
+    payload["event_id"] = "Ev_test_app_mention_auto_follow_up_1"
     event = dict(payload["event"])
     event["text"] = "<@U_BOT> where is this located and what is the best use case"
     event["ts"] = "1715860000.000250"
@@ -362,6 +380,75 @@ def _force_agent_action_payload(query_id: str) -> dict[str, object]:
     return payload
 
 
+def _follow_up_action_payload(query_id: str) -> dict[str, object]:
+    payload = _interactivity_payload(query_id)
+    payload["trigger_id"] = "13345224609.738474920.followup-trigger"
+    payload["actions"] = [{"action_id": "open_follow_up_modal", "value": query_id}]
+    return payload
+
+
+def _follow_up_modal_submission_payload(
+    private_metadata: str,
+    *,
+    query_text: str = "Look deeper on location and use case",
+    mode: str = "auto",
+    suggestion_id: str | None = None,
+) -> dict[str, object]:
+    metadata = json.loads(private_metadata or "{}")
+    metadata["mode"] = mode
+    choice_value = suggestion_id or "custom"
+    values: dict[str, object] = {
+        "follow_up_mode_block": {
+            "follow_up_mode": {
+                "type": "radio_buttons",
+                "selected_option": {"text": {"type": "plain_text", "text": mode.title()}, "value": mode},
+            }
+        },
+        "follow_up_question_block": {
+            "follow_up_question": {"type": "plain_text_input", "value": query_text}
+        },
+        "follow_up_suggestion_block": {
+            "follow_up_suggestion": {
+                "type": "radio_buttons",
+                "selected_option": {"text": {"type": "plain_text", "text": "Suggested" if suggestion_id else "Custom question"}, "value": choice_value},
+            }
+        },
+    }
+    return {
+        "type": "view_submission",
+        "team": {"id": "T_CRE_DEMO"},
+        "user": {"id": "U_REQUESTOR"},
+        "view": {
+            "type": "modal",
+            "callback_id": "follow_up_agent_modal",
+            "private_metadata": json.dumps(metadata, sort_keys=True),
+            "state": {"values": values},
+        },
+    }
+
+
+def _follow_up_refresh_action_payload(view: dict[str, object], mode: str = "auto") -> dict[str, object]:
+    view = dict(view)
+    view["state"] = {
+        "values": {
+            "follow_up_mode_block": {
+                "follow_up_mode": {
+                    "type": "radio_buttons",
+                    "selected_option": {"text": {"type": "plain_text", "text": mode.title()}, "value": mode},
+                }
+            }
+        }
+    }
+    return {
+        "type": "block_actions",
+        "user": {"id": "U_REQUESTOR"},
+        "channel": {"id": "C_CRE_LISTINGS_DEMO"},
+        "team": {"id": "T_CRE_DEMO"},
+        "view": view,
+        "actions": [{"action_id": FOLLOW_UP_MODAL_REFRESH_ACTION_ID, "value": "refresh"}],
+    }
+
+
 def _force_agent_command_body(query_text: str = "where is this located and what is the best use case") -> str:
     return urlencode(
         {
@@ -389,7 +476,7 @@ def _message_shortcut_payload(
 ) -> dict[str, object]:
     return {
         "type": "message_action",
-        "callback_id": "force_agent_message_shortcut",
+        "callback_id": "follow_up_agent_message_shortcut",
         "trigger_id": "13345224609.738474920.8088930838d88f008e1",
         "team": {"id": "T_CRE_DEMO"},
         "user": {"id": "U_REQUESTOR"},
@@ -410,6 +497,13 @@ def _find_actions_block(blocks: list[dict[str, object]]) -> dict[str, object]:
         if block.get("type") == "actions":
             return block
     raise AssertionError("actions block not found")
+
+
+def _find_modal_block(view: dict[str, object], block_id: str) -> dict[str, object]:
+    for block in view.get("blocks") or []:
+        if isinstance(block, dict) and block.get("block_id") == block_id:
+            return block
+    raise AssertionError(f"modal block not found: {block_id}")
 
 
 @pytest.mark.golden
@@ -664,7 +758,7 @@ def test_build_answer_blocks_adds_compact_trust_receipt_and_table() -> None:
     assert [element["action_id"] for element in blocks[3]["elements"]] == [
         "show_sources",
         "look_deeper",
-        "force_agent_query",
+        "open_follow_up_modal",
     ]
 
 
@@ -700,13 +794,57 @@ def test_query_worker_posts_threaded_answer_with_show_sources_button(
     assert action_element["action_id"] == "show_sources"
     assert UUID(action_element["value"])
     assert actions_block["elements"][1]["action_id"] == "look_deeper"
-    assert actions_block["elements"][2]["action_id"] == "force_agent_query"
+    assert actions_block["elements"][2]["action_id"] == "open_follow_up_modal"
 
     latest_query = async_runner.run(_load_latest_query())
     assert latest_query is not None
     assert latest_query.slack_channel_id == "C_CRE_LISTINGS_DEMO"
     assert latest_query.slack_user_id == "U_REQUESTOR"
     assert latest_query.slack_ts == "1715860000.000100"
+
+
+@pytest.mark.golden
+def test_auto_follow_up_reuses_sufficient_thread_evidence(
+    prepared_slack_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = _app_mention_payload()
+    body = json.dumps(payload)
+    headers = {"content-type": "application/json", **_signed_headers("test-signing-secret", body)}
+
+    response = async_runner.run(_post_request("/slack/events", content=body, headers=headers))
+    assert response.status_code == 200
+
+    gateway = RecordingSlackGateway()
+    async_runner.run(process_pending_query_jobs(slack_gateway=gateway, limit=1))
+    parent_query_id = _find_actions_block(gateway.thread_replies[0]["blocks"])["elements"][0]["value"]
+
+    session_before = async_runner.run(_load_thread_session("C_CRE_LISTINGS_DEMO", "1715860000.000100"))
+    assert session_before is not None
+    assert session_before.accumulated_evidence_ids_json
+
+    async_runner.run(
+        enqueue_follow_up_request(
+            query_text="where is it located",
+            mode="auto",
+            parent_query_id=parent_query_id,
+            channel_id="C_CRE_LISTINGS_DEMO",
+            user_id="U_REQUESTOR",
+            team_id="T_CRE_DEMO",
+            thread_ts="1715860000.000100",
+        )
+    )
+    processed = async_runner.run(process_pending_query_jobs(slack_gateway=gateway, limit=1))
+
+    assert processed[0]["job_type"] == "follow_up"
+    assert processed[0]["route_mode"] == "instant"
+    assert processed[0]["follow_up"]["resolution"] == "sufficient"
+    explain_payload = async_runner.run(explain_query(str(processed[0]["query_id"])))
+    assert explain_payload["reason_codes"] == ["follow_up", "thread_evidence_reuse", "coverage_sufficient"]
+
+    session_after = async_runner.run(_load_thread_session("C_CRE_LISTINGS_DEMO", "1715860000.000100"))
+    assert session_after is not None
+    assert len(session_after.query_history_json) >= 2
 
 
 @pytest.mark.golden
@@ -727,7 +865,7 @@ def test_zero_evidence_slack_answer_offers_look_deeper_only(
     assert processed[0]["answer_status"] == "unsupported"
     posted_reply = gateway.thread_replies[0]
     actions_block = _find_actions_block(posted_reply["blocks"])
-    assert [element["action_id"] for element in actions_block["elements"]] == ["look_deeper", "force_agent_query"]
+    assert [element["action_id"] for element in actions_block["elements"]] == ["look_deeper", "open_follow_up_modal"]
     assert "Use *Look deeper*" in posted_reply["text"]
 
     query_id = actions_block["elements"][0]["value"]
@@ -738,11 +876,11 @@ def test_zero_evidence_slack_answer_offers_look_deeper_only(
 
 
 @pytest.mark.golden
-def test_auto_force_agent_thread_follow_up_queues_direct_agent_job(
+def test_auto_thread_follow_up_queues_follow_up_job(
     prepared_slack_db: None,
     async_runner: asyncio.Runner,
 ) -> None:
-    payload = _auto_force_agent_thread_follow_up_payload()
+    payload = _auto_thread_follow_up_payload()
     body = json.dumps(payload)
     headers = {"content-type": "application/json", **_signed_headers("test-signing-secret", body)}
 
@@ -751,19 +889,20 @@ def test_auto_force_agent_thread_follow_up_queues_direct_agent_job(
 
     counts = async_runner.run(_counts())
     assert counts["query_jobs"] == 0
-    job = async_runner.run(_load_latest_job("force_agent"))
+    job = async_runner.run(_load_latest_job("follow_up"))
     assert job is not None
     assert job.checkpoint_json["query_text"] == "where is this located and what is the best use case"
-    assert job.checkpoint_json["force_agent_source"] == "auto_thread_follow_up"
-    assert job.checkpoint_json["force_agent_reason_codes"] == ["auto_thread_follow_up"]
+    assert job.checkpoint_json["mode"] == "auto"
+    assert job.checkpoint_json["follow_up_source"] == "auto_thread_follow_up"
+    assert job.checkpoint_json["follow_up_reason_codes"] == ["auto_thread_follow_up"]
 
 
 @pytest.mark.golden
-def test_auto_force_agent_thread_follow_up_bypasses_instant_router_and_preserves_reason_code(
+def test_auto_thread_follow_up_uses_coverage_router_and_preserves_thread_context(
     prepared_slack_db: None,
     async_runner: asyncio.Runner,
 ) -> None:
-    payload = _auto_force_agent_thread_follow_up_payload()
+    payload = _auto_thread_follow_up_payload()
     body = json.dumps(payload)
     headers = {"content-type": "application/json", **_signed_headers("test-signing-secret", body)}
 
@@ -773,15 +912,15 @@ def test_auto_force_agent_thread_follow_up_bypasses_instant_router_and_preserves
     gateway = RecordingSlackGateway()
     processed = async_runner.run(process_pending_query_jobs(slack_gateway=gateway, limit=1))
 
-    assert processed[0]["job_type"] == "force_agent"
-    assert processed[0]["force_agent"] is True
+    assert processed[0]["job_type"] == "follow_up"
+    assert processed[0]["follow_up"]["mode"] == "auto"
     assert processed[0]["pending_message_ts"] == gateway.thread_replies[0]["ts"]
     assert gateway.thread_replies[0]["thread_ts"] == "1715860000.000100"
 
     query = async_runner.run(_load_latest_query())
     assert query is not None
     explain_payload = async_runner.run(explain_query(str(query.id)))
-    assert explain_payload["reason_codes"] == ["force_agent", "instant_router_skipped", "auto_thread_follow_up"]
+    assert "follow_up" in explain_payload["reason_codes"]
     assert explain_payload["slack_context"]["message_ts"] == "1715860000.000250"
     assert explain_payload["slack_context"]["thread_ts"] == "1715860000.000100"
 
@@ -850,7 +989,7 @@ def test_force_agent_slash_command_posts_channel_update_without_thread(
 
 
 @pytest.mark.golden
-def test_force_agent_message_shortcut_queues_threaded_direct_agent_job(
+def test_follow_up_message_shortcut_opens_thread_modal(
     prepared_slack_db: None,
     async_runner: asyncio.Runner,
     monkeypatch: pytest.MonkeyPatch,
@@ -868,15 +1007,14 @@ def test_force_agent_message_shortcut_queues_threaded_direct_agent_job(
 
     response = async_runner.run(_post_request("/slack/interactivity", content=form_body, headers=headers))
     assert response.status_code == 200
-    assert fake_gateway.ephemeral_replies[-1]["thread_ts"] == "1715860000.000100"
-    assert fake_gateway.ephemeral_replies[-1]["text"] == "On it. Force-agent mode is going straight to Toolhouse with backend MCP checks."
-
-    job = async_runner.run(_load_latest_job("force_agent"))
-    assert job is not None
-    assert job.checkpoint_json["query_text"] == "where is this located and what is the best use case"
-    assert job.checkpoint_json["thread_ts"] == "1715860000.000100"
-    assert job.checkpoint_json["query_ts"] == "1715860000.000350"
-    assert job.checkpoint_json["event_type"] == "message_shortcut"
+    assert fake_gateway.opened_modals
+    opened = fake_gateway.opened_modals[-1]
+    assert opened["trigger_id"] == "13345224609.738474920.8088930838d88f008e1"
+    view = opened["view"]
+    assert view["callback_id"] == "follow_up_agent_modal"
+    metadata = json.loads(view["private_metadata"])
+    assert metadata["thread_ts"] == "1715860000.000100"
+    assert metadata["channel_id"] == "C_CRE_LISTINGS_DEMO"
 
 
 @pytest.mark.golden
@@ -1001,7 +1139,7 @@ def test_look_deeper_action_enqueues_and_posts_local_deeper_review(
 
 
 @pytest.mark.golden
-def test_force_agent_button_action_enqueues_direct_agent_review(
+def test_follow_up_button_opens_modal_and_submission_queues_follow_up(
     prepared_slack_db: None,
     async_runner: asyncio.Runner,
     monkeypatch: pytest.MonkeyPatch,
@@ -1021,7 +1159,7 @@ def test_force_agent_button_action_enqueues_direct_agent_review(
     async_runner.run(process_pending_query_jobs(slack_gateway=fake_gateway, limit=1))
 
     query_id = _find_actions_block(fake_gateway.thread_replies[0]["blocks"])["elements"][2]["value"]
-    action_payload = _force_agent_action_payload(query_id)
+    action_payload = _follow_up_action_payload(query_id)
     form_body = urlencode({"payload": json.dumps(action_payload)})
     action_headers = {
         "content-type": "application/x-www-form-urlencoded",
@@ -1030,22 +1168,300 @@ def test_force_agent_button_action_enqueues_direct_agent_review(
 
     action_response = async_runner.run(_post_request("/slack/interactivity", content=form_body, headers=action_headers))
     assert action_response.status_code == 200
-    assert fake_gateway.ephemeral_replies[-1]["thread_ts"] == "1715860000.000100"
-    assert fake_gateway.ephemeral_replies[-1]["text"] == "On it. Force-agent mode is going straight to Toolhouse with backend MCP checks."
+    assert fake_gateway.opened_modals
+    opened_view = fake_gateway.opened_modals[-1]["view"]
+    assert opened_view["callback_id"] == "follow_up_agent_modal"
+    metadata = json.loads(opened_view["private_metadata"])
+    assert metadata["parent_query_id"] == query_id
+    assert metadata["thread_ts"] == "1715860000.000100"
 
-    job = async_runner.run(_load_latest_job("force_agent"))
+    submit_payload = _follow_up_modal_submission_payload(opened_view["private_metadata"], mode="agent")
+    submit_form_body = urlencode({"payload": json.dumps(submit_payload)})
+    submit_headers = {
+        "content-type": "application/x-www-form-urlencoded",
+        **_signed_headers("test-signing-secret", submit_form_body),
+    }
+    submit_response = async_runner.run(_post_request("/slack/interactivity", content=submit_form_body, headers=submit_headers))
+    assert submit_response.status_code == 200
+    assert fake_gateway.ephemeral_replies[-1]["thread_ts"] == "1715860000.000100"
+    assert fake_gateway.ephemeral_replies[-1]["text"] == "On it. Follow-up queued in Agent mode."
+
+    job = async_runner.run(_load_latest_job("follow_up"))
     assert job is not None
-    assert job.checkpoint_json["query_text"] == "Show office buildings under $50/sq ft."
+    assert job.checkpoint_json["query_text"] == "Look deeper on location and use case"
+    assert job.checkpoint_json["mode"] == "agent"
+    assert job.checkpoint_json["parent_query_id"] == query_id
     assert job.checkpoint_json["thread_ts"] == "1715860000.000100"
-    assert job.checkpoint_json["event_type"] == "force_agent_action"
+    assert job.checkpoint_json["event_type"] == "follow_up_modal"
 
     processed = async_runner.run(process_pending_query_jobs(slack_gateway=fake_gateway, limit=1))
     assert processed[0]["pending_message_ts"] == fake_gateway.thread_replies[-1]["ts"]
+    assert processed[0]["job_type"] == "follow_up"
+    assert processed[0]["follow_up"]["mode"] == "agent"
     assert processed[0]["validation"]["valid"] is True
     assert fake_gateway.updated_messages
     assert any(block.get("type") == "context" for block in fake_gateway.thread_replies[-1]["blocks"])
     assert fake_gateway.thread_replies[-1]["text"].startswith("_Mode: Agent mode - local deeper review_")
     assert "Deeper review" in fake_gateway.thread_replies[-1]["text"]
+
+
+@pytest.mark.golden
+def test_follow_up_modal_opens_with_generate_suggestions_when_cache_empty(
+    prepared_slack_db: None,
+    async_runner: asyncio.Runner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.slack import runtime as slack_runtime
+    from app.answering import follow_up_suggestions as suggestions_module
+
+    fake_gateway = RecordingSlackGateway()
+    monkeypatch.setattr(slack_runtime, "get_slack_gateway", lambda: fake_gateway)
+    generation_calls: list[dict[str, object]] = []
+
+    async def unexpected_generation(context: dict[str, object]) -> list[dict[str, object]]:
+        generation_calls.append(context)
+        return []
+
+    monkeypatch.setattr(suggestions_module, "_toolhouse_candidate_questions", unexpected_generation)
+    get_slack_app.cache_clear()
+    get_slack_handler.cache_clear()
+
+    payload = _app_mention_payload()
+    body = json.dumps(payload)
+    headers = {"content-type": "application/json", **_signed_headers("test-signing-secret", body)}
+    assert async_runner.run(_post_request("/slack/events", content=body, headers=headers)).status_code == 200
+    async_runner.run(process_pending_query_jobs(slack_gateway=fake_gateway, limit=1))
+
+    query_id = _find_actions_block(fake_gateway.thread_replies[0]["blocks"])["elements"][2]["value"]
+    action_payload = _follow_up_action_payload(query_id)
+    form_body = urlencode({"payload": json.dumps(action_payload)})
+    action_headers = {"content-type": "application/x-www-form-urlencoded", **_signed_headers("test-signing-secret", form_body)}
+
+    response = async_runner.run(_post_request("/slack/interactivity", content=form_body, headers=action_headers))
+
+    assert response.status_code == 200
+    assert fake_gateway.opened_modals
+    assert not fake_gateway.updated_modals
+    assert generation_calls == []
+    opened_view = fake_gateway.opened_modals[-1]["view"]
+    mode_block = _find_modal_block(opened_view, "follow_up_mode_block")
+    assert mode_block["element"]["type"] == "radio_buttons"
+    assert mode_block["element"]["action_id"] == "follow_up_mode"
+    assert mode_block["element"]["initial_option"]["value"] == "auto"
+    assert [option["value"] for option in mode_block["element"]["options"]] == ["instant", "auto", "agent"]
+    assert _find_modal_block(opened_view, "follow_up_suggestions_empty_block")
+    suggestion_block = _find_modal_block(opened_view, "follow_up_suggestion_block")
+    options = suggestion_block["element"]["options"]
+    assert len(options) == 1
+    assert options[0]["value"] == "custom"
+    refresh_block = _find_modal_block(opened_view, "follow_up_refresh_block")
+    assert refresh_block["elements"][0]["action_id"] == FOLLOW_UP_MODAL_REFRESH_ACTION_ID
+    assert refresh_block["elements"][0]["text"]["text"] == "Generate suggestions"
+    assert refresh_block["elements"][0]["value"] == "generate"
+
+    thread_session = async_runner.run(_load_thread_session("C_CRE_LISTINGS_DEMO", "1715860000.000100"))
+    assert thread_session is not None
+    assert "follow_up_suggestions" not in thread_session.session_context_json
+
+
+@pytest.mark.golden
+def test_follow_up_generate_button_preserves_mode_and_generates_suggestions(
+    prepared_slack_db: None,
+    async_runner: asyncio.Runner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.slack import runtime as slack_runtime
+    from app.answering import follow_up_suggestions as suggestions_module
+
+    fake_gateway = RecordingSlackGateway()
+    monkeypatch.setattr(slack_runtime, "get_slack_gateway", lambda: fake_gateway)
+    generation_calls: list[dict[str, object]] = []
+
+    async def generated_candidates(context: dict[str, object]) -> list[dict[str, object]]:
+        generation_calls.append(context)
+        return [{"kind": "price_spread", "question": "What's the rent spread for the current set?"}]
+
+    monkeypatch.setattr(suggestions_module, "_toolhouse_candidate_questions", generated_candidates)
+    get_slack_app.cache_clear()
+    get_slack_handler.cache_clear()
+
+    payload = _app_mention_payload()
+    body = json.dumps(payload)
+    headers = {"content-type": "application/json", **_signed_headers("test-signing-secret", body)}
+    assert async_runner.run(_post_request("/slack/events", content=body, headers=headers)).status_code == 200
+    async_runner.run(process_pending_query_jobs(slack_gateway=fake_gateway, limit=1))
+
+    query_id = _find_actions_block(fake_gateway.thread_replies[0]["blocks"])["elements"][2]["value"]
+    action_payload = _follow_up_action_payload(query_id)
+    form_body = urlencode({"payload": json.dumps(action_payload)})
+    action_headers = {"content-type": "application/x-www-form-urlencoded", **_signed_headers("test-signing-secret", form_body)}
+    assert async_runner.run(_post_request("/slack/interactivity", content=form_body, headers=action_headers)).status_code == 200
+    assert generation_calls == []
+
+    opened_view = fake_gateway.opened_modals[-1]["view"]
+    generate_block = _find_modal_block(opened_view, "follow_up_refresh_block")
+    assert generate_block["elements"][0]["text"]["text"] == "Generate suggestions"
+    mode_payload = _follow_up_refresh_action_payload(opened_view, "agent")
+    mode_body = urlencode({"payload": json.dumps(mode_payload)})
+    mode_headers = {"content-type": "application/x-www-form-urlencoded", **_signed_headers("test-signing-secret", mode_body)}
+
+    response = async_runner.run(_post_request("/slack/interactivity", content=mode_body, headers=mode_headers))
+
+    assert response.status_code == 200
+    assert len(generation_calls) == 1
+    assert fake_gateway.updated_modals[0]["view"]["blocks"][1]["block_id"] == "follow_up_suggestions_loading_block"
+    toggled_view = fake_gateway.updated_modals[-1]["view"]
+    metadata = json.loads(toggled_view["private_metadata"])
+    assert metadata["mode"] == "agent"
+    assert metadata["has_follow_up_suggestions"] is True
+    mode_block = _find_modal_block(toggled_view, "follow_up_mode_block")
+    assert mode_block["element"]["initial_option"]["value"] == "agent"
+    suggestion_block = _find_modal_block(toggled_view, "follow_up_suggestion_block")
+    assert len(suggestion_block["element"]["options"]) == 6
+    assert suggestion_block["element"]["options"][0]["text"]["text"] == "What's the rent spread for the current set?"
+    refresh_block = _find_modal_block(toggled_view, "follow_up_refresh_block")
+    assert refresh_block["elements"][0]["text"]["text"] == "Refresh suggestions"
+
+    thread_session = async_runner.run(_load_thread_session("C_CRE_LISTINGS_DEMO", "1715860000.000100"))
+    assert thread_session is not None
+    stored = thread_session.session_context_json["follow_up_suggestions"]["suggestions"]
+    price_spread = [suggestion for suggestion in stored if suggestion["kind"] == "price_spread"]
+    assert price_spread[0]["source"] == "toolhouse_refresh"
+    assert price_spread[0]["validation"]["raw_sql_execution"] is False
+
+
+@pytest.mark.golden
+def test_toolhouse_answer_suggestions_are_cached_for_next_modal(
+    prepared_slack_db: None,
+    async_runner: asyncio.Runner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.slack import runtime as slack_runtime
+
+    fake_gateway = RecordingSlackGateway()
+    monkeypatch.setattr(slack_runtime, "get_slack_gateway", lambda: fake_gateway)
+    get_slack_app.cache_clear()
+    get_slack_handler.cache_clear()
+
+    payload = _app_mention_payload()
+    body = json.dumps(payload)
+    headers = {"content-type": "application/json", **_signed_headers("test-signing-secret", body)}
+    assert async_runner.run(_post_request("/slack/events", content=body, headers=headers)).status_code == 200
+    async_runner.run(process_pending_query_jobs(slack_gateway=fake_gateway, limit=1))
+
+    query_id = _find_actions_block(fake_gateway.thread_replies[0]["blocks"])["elements"][2]["value"]
+    thread_session = async_runner.run(_load_thread_session("C_CRE_LISTINGS_DEMO", "1715860000.000100"))
+    assert thread_session is not None
+    evidence_ids = [str(value) for value in thread_session.accumulated_evidence_ids_json]
+    async_runner.run(
+        store_agent_follow_up_suggestions(
+            response_payload={"suggested_followups": [{"kind": "price_spread", "question": "What's the rent spread for the current set?"}]},
+            query_id=query_id,
+            slack_channel_id="C_CRE_LISTINGS_DEMO",
+            slack_thread_ts="1715860000.000100",
+            parent_query_id=query_id,
+            evidence_ids=evidence_ids,
+            toolhouse_run_id="run-cached-suggestions",
+        )
+    )
+
+    action_payload = _follow_up_action_payload(query_id)
+    form_body = urlencode({"payload": json.dumps(action_payload)})
+    action_headers = {"content-type": "application/x-www-form-urlencoded", **_signed_headers("test-signing-secret", form_body)}
+
+    response = async_runner.run(_post_request("/slack/interactivity", content=form_body, headers=action_headers))
+
+    assert response.status_code == 200
+    opened_view = fake_gateway.opened_modals[-1]["view"]
+    suggestion_block = _find_modal_block(opened_view, "follow_up_suggestion_block")
+    options = suggestion_block["element"]["options"]
+    assert options[0]["text"]["text"] == "What's the rent spread for the current set?"
+    assert options[0]["description"]["text"] == "Instant, prevalidated SQL"
+    refresh_block = _find_modal_block(opened_view, "follow_up_refresh_block")
+    assert refresh_block["elements"][0]["text"]["text"] == "Refresh suggestions"
+
+
+def test_follow_up_modal_validation_rejects_custom_text_with_suggestion() -> None:
+    private_metadata = json.dumps({"channel_id": "C_CRE_LISTINGS_DEMO", "thread_ts": "1715860000.000100"})
+    payload = _follow_up_modal_submission_payload(
+        private_metadata,
+        query_text="Use my wording instead",
+        mode="auto",
+        suggestion_id="suggestion-1",
+    )
+
+    errors = validate_follow_up_modal_submission(payload["view"])
+
+    assert errors == {"follow_up_question_block": "Clear this field or select Custom question."}
+
+
+@pytest.mark.golden
+def test_selected_suggested_follow_up_runs_instant_prevalidated_template(
+    prepared_slack_db: None,
+    async_runner: asyncio.Runner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.slack import runtime as slack_runtime
+
+    fake_gateway = RecordingSlackGateway()
+    monkeypatch.setattr(slack_runtime, "get_slack_gateway", lambda: fake_gateway)
+    get_slack_app.cache_clear()
+    get_slack_handler.cache_clear()
+
+    payload = _app_mention_payload()
+    body = json.dumps(payload)
+    headers = {"content-type": "application/json", **_signed_headers("test-signing-secret", body)}
+    assert async_runner.run(_post_request("/slack/events", content=body, headers=headers)).status_code == 200
+    async_runner.run(process_pending_query_jobs(slack_gateway=fake_gateway, limit=1))
+
+    query_id = _find_actions_block(fake_gateway.thread_replies[0]["blocks"])["elements"][2]["value"]
+    action_payload = _follow_up_action_payload(query_id)
+    form_body = urlencode({"payload": json.dumps(action_payload)})
+    action_headers = {"content-type": "application/x-www-form-urlencoded", **_signed_headers("test-signing-secret", form_body)}
+    assert async_runner.run(_post_request("/slack/interactivity", content=form_body, headers=action_headers)).status_code == 200
+
+    opened_view = fake_gateway.opened_modals[-1]["view"]
+    generate_payload = _follow_up_refresh_action_payload(opened_view, "auto")
+    generate_body = urlencode({"payload": json.dumps(generate_payload)})
+    generate_headers = {"content-type": "application/x-www-form-urlencoded", **_signed_headers("test-signing-secret", generate_body)}
+    assert async_runner.run(_post_request("/slack/interactivity", content=generate_body, headers=generate_headers)).status_code == 200
+
+    updated_view = fake_gateway.updated_modals[-1]["view"]
+    suggestion_block = _find_modal_block(updated_view, "follow_up_suggestion_block")
+    suggestion_id = suggestion_block["element"]["options"][0]["value"]
+    submit_payload = _follow_up_modal_submission_payload(
+        updated_view["private_metadata"],
+        query_text="",
+        mode="agent",
+        suggestion_id=suggestion_id,
+    )
+    submit_body = urlencode({"payload": json.dumps(submit_payload)})
+    submit_headers = {"content-type": "application/x-www-form-urlencoded", **_signed_headers("test-signing-secret", submit_body)}
+
+    submit_response = async_runner.run(_post_request("/slack/interactivity", content=submit_body, headers=submit_headers))
+    assert submit_response.status_code == 200
+    assert fake_gateway.ephemeral_replies[-1]["text"] == "On it. Suggested follow-up queued in Instant mode."
+
+    job = async_runner.run(_load_latest_job("follow_up"))
+    assert job is not None
+    assert job.checkpoint_json["mode"] == "instant"
+    assert job.checkpoint_json["event_type"] == "follow_up_suggestion"
+    assert job.checkpoint_json["suggested_follow_up"]["kind"] == "average_rent"
+
+    processed = async_runner.run(process_pending_query_jobs(slack_gateway=fake_gateway, limit=1))
+    assert processed[0]["job_type"] == "follow_up"
+    assert processed[0]["answer_mode"] == "instant_answer"
+    assert processed[0]["route_mode"] == "instant"
+    assert processed[0]["follow_up"]["resolution"] == "suggested_prevalidated_sql"
+    assert "Average rent" in fake_gateway.thread_replies[-1]["text"]
+
+    explain_payload = async_runner.run(explain_query(str(processed[0]["query_id"])))
+    assert "prevalidated_sql" in explain_payload["reason_codes"]
+    thread_session = async_runner.run(_load_thread_session("C_CRE_LISTINGS_DEMO", "1715860000.000100"))
+    assert thread_session is not None
+    stored_suggestions = thread_session.session_context_json["follow_up_suggestions"]["suggestions"]
+    answered = [suggestion for suggestion in stored_suggestions if suggestion["id"] == suggestion_id]
+    assert answered[0]["status"] == "answered"
 
 
 @pytest.mark.golden

@@ -69,7 +69,7 @@ Recommended backend tool surface for the full Toolhouse worker:
 - `nearby_properties(origin, radius_miles, filters)`
 - `audit_data()`
 
-For the first live Toolhouse slice, the backend now has the full planned Toolhouse-facing tool surface, a mounted Streamable HTTP MCP endpoint at `/toolhouse/mcp`, and a Toolhouse Workers API client. The `Look deeper` worker calls Toolhouse when `CRE_TOOLHOUSE_API_KEY` and `CRE_TOOLHOUSE_AGENT_ID` are configured; otherwise it preserves the local evidence-bound fallback. The backend also supports a direct `/force-agent` Slack mode that bypasses the local instant router, persists a replayable query package, and sends Toolhouse the same backend-owned MCP and citation boundary. The initial payload includes an `evidence_context` package with a compact evidence manifest, coverage counts, source map, available backend MCP tools, and recommended calls. If Toolhouse needs to cite a backend result outside the initial bundle, it must call `expand_query_evidence` or a query-aware coordinator tool such as `summarize_inventory`, `rank_properties`, `get_property_timeline`, or `find_property_conflicts`; the backend appends the resulting evidence IDs to the same query and refreshes validation before posting.
+For the first live Toolhouse slice, the backend now has the full planned Toolhouse-facing tool surface, a mounted Streamable HTTP MCP endpoint at `/toolhouse/mcp`, and a Toolhouse Workers API client. The `Look deeper` worker calls Toolhouse when `CRE_TOOLHOUSE_API_KEY` and `CRE_TOOLHOUSE_AGENT_ID` are configured; otherwise it preserves the local evidence-bound fallback. The backend also supports a direct `/force-agent` Slack mode that bypasses the local instant router, persists a replayable query package, and sends Toolhouse the same backend-owned MCP and citation boundary. Follow-up agent work arrives as `task=follow_up_agent` and includes `thread_session` plus `follow_up` context: query history, prior accumulated evidence IDs, missing signals, coverage confidence, and recommended MCP calls. Modal suggestion work arrives as `task=suggest_followups`; Toolhouse returns allowed question kinds and wording only, while the backend attaches prevalidated SQL templates and evidence parameters. The initial payload includes an `evidence_context` package with a compact evidence manifest, coverage counts, source map, available backend MCP tools, and recommended calls. If Toolhouse needs to cite a backend result outside the initial bundle, it must call `expand_query_evidence` or a query-aware coordinator tool such as `summarize_inventory`, `rank_properties`, `get_property_timeline`, or `find_property_conflicts`; the backend appends the resulting evidence IDs to the same query and refreshes validation before posting.
 
 ### Toolhouse Docs
 
@@ -184,7 +184,7 @@ Redis decision: do not add hosted or local Redis for MVP persistence. Use Postgr
 The backend does not need to think in only one order forever, but the current product flow is intentionally split into two modes.
 
 - `Instant answer` is the first Slack reply path. The backend router chooses whether that reply is `instant` structured retrieval or `hybrid` backend synthesis based on the query pattern.
-- `Agent mode` is the async deeper-review path triggered after the first answer through `Look deeper`, or directly through `/force-agent` when the user wants to skip the local router.
+- `Agent mode` is the async deeper-review path triggered after the first answer through `Look deeper`, through `Agent` or Auto escalation in the `Follow Up with Agent ⚡` modal, or directly through `/force-agent` when the user wants to skip the local router.
 - That means the current implementation is not "always heuristic first, then agent" in the narrow sense. The backend already chooses between direct structured answering and hybrid local synthesis for the first pass.
 - What is true today is that Toolhouse agent mode is not the first-pass default. It is a bounded second-pass escalation so Slack stays fast, sourced, and validation-safe.
 - If we later want backend-driven direct-to-agent routing for certain query classes, the clean shape is to let the backend decide `answer_mode` up front and still keep the same citation-validation boundary before posting.
@@ -238,16 +238,23 @@ That lets Toolhouse call the evidence spine intelligently without direct DB acce
 1. User asks a question in Slack.
 2. Backend ACKs Slack and queues `answer_query`.
 3. Worker claims the job, posts a short pending thread reply for `Instant answer`, and stores that message `ts` in job metadata.
-4. Worker updates that same thread reply in place to the instant sourced answer with `Show sources` and `Look deeper`.
+4. Worker updates that same thread reply in place to the instant sourced answer with `Show sources`, `Look deeper`, and `Follow Up with Agent ⚡`.
 5. User clicks `Look deeper`.
 6. Backend ACKs the action, posts a thread-targeted ephemeral confirmation, and queues `look_deeper`.
 7. Worker claims `look_deeper`, updates or posts a pending `Agent mode` status in the same thread, and calls `build_escalation_payload(query_id)`.
 8. Backend sends the payload to the Toolhouse worker through `POST https://agents.toolhouse.ai/0c2c4555-5d96-47e4-8e05-f956de7a102e` when there is no run ID, or `PUT https://agents.toolhouse.ai/0c2c4555-5d96-47e4-8e05-f956de7a102e/{run_id}` when continuing a run.
 9. Toolhouse calls CRE Backend MCP tools if more evidence, source detail, data quality context, or calculation is needed.
-10. The direct `/force-agent` variant skips the first-pass local answer, seeds a replayable query with `route_mode=agent_forced`, and sends Toolhouse the same validation-safe package immediately.
-10. Backend saves `X-Toolhouse-Run-ID` when returned.
-11. Toolhouse streams a response; backend collects chunks and parses the strict JSON object with `rendered_answer` and `cited_evidence_ids`.
-12. Backend validates the output contract and citations, then updates the same thread reply in place to the final validated `Agent mode` answer.
+10. The `Follow Up with Agent ⚡` modal opens immediately, persists `ThreadSession` state for `channel_id + thread_ts`, and first loads cached unanswered suggestions produced by previous Toolhouse answer runs.
+11. If no cached suggestions exist, the modal button reads `Generate suggestions`; clicking it asks Toolhouse for `suggest_followups` question wording only.
+12. If cached suggestions exist, the modal button reads `Refresh suggestions`; clicking it sends the same lightweight `suggest_followups` request and merges the result with still-unanswered options.
+13. Backend attaches prevalidated SQL template metadata to accepted suggested kinds, merges them with the existing unanswered suggestion bank, marks selected suggestions answered, and displays the top 4-5 in one exclusive follow-up-choice radio group alongside `Custom question`.
+14. The modal uses radio buttons for custom follow-up mode: `Instant`, default `Auto`, and `Agent`. If the user selects a suggestion, the next `follow_up` job ignores the custom mode radio and runs in guaranteed `Instant` mode over the current evidence bundle.
+15. If the user selects `Custom question`, the modal routes the typed prompt through `Instant`, `Auto`, or `Agent` according to coverage. Auto escalates to Toolhouse only when the accumulated bundle is insufficient. Backend validation rejects submissions that include both a selected suggestion and custom text.
+16. Every Toolhouse answer task sees the still-relevant unanswered suggestions and may return 0-5 next `{kind, question}` objects for the next modal.
+17. The direct `/force-agent` variant skips the first-pass local answer, seeds a replayable query with `route_mode=agent_forced`, and sends Toolhouse the same validation-safe package immediately.
+18. Backend saves `X-Toolhouse-Run-ID` when returned.
+19. Toolhouse streams a response; backend collects chunks and parses the strict JSON object with `rendered_answer` and `cited_evidence_ids`.
+20. Backend validates the output contract and citations, then updates the same thread reply in place to the final validated `Agent mode` answer.
 
 ### Backend Tool Transport
 
@@ -456,6 +463,7 @@ Required integrations and actions to add:
    - sample query package JSON
    - required output JSON schema
    - local readiness notes
+  - follow-up thread session and suggestions schema
 3. Code Interpreter. Use for multi-call comparison, batch ranking, large JSON inspection, table reshaping, strict JSON/schema sanity checks, and API fallback diagnostics. Optimize for small, readable Python. Do not persist state inside the sandbox.
 4. Semantic Memory Search and Memory (remember). Use memory only for worker operating preferences, recurring safe patterns, and prior failure modes. Never store property facts, source text, evidence IDs, customer secrets, Slack private content, or backend tokens in Toolhouse memory.
 5. Web Search and Newswire. Use only when the user explicitly asks for external market/current context or when MCP evidence is thin and the answer needs a clearly labeled external caveat.
@@ -524,6 +532,8 @@ Toolhouse capability policy:
 
 Answer modes this worker should handle:
 - look_deeper: produce a richer evidence-grounded interpretation of an existing local answer.
+- follow_up_agent: answer a custom Slack modal follow-up using ThreadSession query history, prior evidence IDs, coverage gaps, and MCP verification.
+- suggest_followups: return 3-5 short allowed `{kind, question}` options for the Slack modal refresh path; do not answer the CRE question, cite evidence, or include SQL.
 - broaden_search: relax filters, find near misses, and explain what changed.
 - conflict_review: compare conflicting sources and prefer fresher or higher-authority backend evidence when available.
 - tenant_fit: rank options against tenant requirements using MCP evidence.
@@ -568,11 +578,27 @@ The backend will usually send a JSON message with fields like:
 - decision_summary
 - evidence_context
 - backend_mcp_tools
+- thread_session, for `task=follow_up_agent`
+- follow_up, for `task=follow_up_agent`
+- follow_up_suggestion_context, optionally containing still-relevant unanswered modal suggestions from previous Toolhouse answer runs
+- allowed_kinds, for `task=suggest_followups`
 - slack_context, optionally including channel, thread_ts, message_ts, and user label
 - instructions
 
 Output shape:
-Return only valid JSON. The backend will parse, validate, and post the answer.
+For `task=suggest_followups`, return only this lightweight modal-support JSON. The backend attaches prevalidated SQL templates and evidence parameters after your response:
+
+{
+  "suggested_followups": [
+    {"kind": "average_rent", "question": "What's the average rent for these?"},
+    {"kind": "availability_before_q3", "question": "Which have availability before Q3 2026?"},
+    {"kind": "conflict_review", "question": "Show me conflicts in this set"},
+    {"kind": "largest_options", "question": "Which are the largest options?"},
+    {"kind": "price_spread", "question": "What's the rent spread in this set?"}
+  ]
+}
+
+For answer tasks, return only valid JSON. The backend will parse, validate, and post the answer.
 
 {
   "status": "answered" | "needs_more_evidence" | "mcp_unavailable" | "validation_risk" | "tool_error" | "external_context_only",
@@ -593,14 +619,20 @@ Return only valid JSON. The backend will parse, validate, and post the answer.
   ],
   "unsupported_claims_dropped": ["Any claim considered but excluded because evidence was missing."],
   "missing_data": ["Specific missing source, field, permission, or evidence gap that limits the answer."],
-  "suggested_followups": ["One useful next question or data action, if relevant."]
+  "suggested_followups": [
+    {"kind": "price_spread", "question": "What's the rent spread in this set?"},
+    {"kind": "largest_options", "question": "Which are the largest options?"}
+  ]
 }
 
 Validation expectations:
 The backend will reject your response if cited_evidence_ids contains IDs outside the allowed evidence set. Prefer fewer, stronger citations over many weak citations. If no citations are available from MCP, set status to needs_more_evidence or external_context_only and explain what backend evidence is missing.
 
+Suggested follow-up expectations:
+For `task=suggest_followups`, only return allowed kinds from the input `allowed_kinds`. Do not include SQL. Do not call Slack write tools. The backend will convert accepted kinds into modal options with backend-owned `sql_query`, `sql_params`, and validation metadata, and selected suggestions will run in guaranteed Instant mode. For answer tasks, return `suggested_followups` as 0-5 modal-ready `{kind, question}` objects when useful. Review `follow_up_suggestion_context.unanswered_suggestions`, preserve still-relevant unanswered options, avoid duplicates, and never include SQL, IDs, or citations inside suggestion objects.
+
 First test task:
-When the backend sends a query package for a `Look deeper` click or a `force_agent` request, call the CRE Backend MCP explain_evidence(query_id) tool first, inspect the evidence, call additional MCP tools only if needed, and return a grounded JSON answer with no Slack write actions.
+When the backend sends a query package for a `Look deeper`, `force_agent`, or `follow_up_agent` request, call the CRE Backend MCP explain_evidence(query_id) tool first, inspect the evidence, call additional MCP tools only if needed, and return a grounded JSON answer with no Slack write actions. When the backend sends `task=suggest_followups`, return only the lightweight suggested-followups JSON.
 ```
 
 ## Improved System Prompt To Paste
@@ -630,6 +662,7 @@ Consult these when useful:
 - 04-sample-query-package.json
 - 05-required-output-schema.json
 - 06-local-readiness-notes.md
+- 07-follow-up-thread-session-and-suggestions.md
 
 AVAILABLE SUPPORTING TOOLHOUSE INTEGRATIONS
 Use only the enabled supporting integrations below, and only when they add value under the policy here:
@@ -689,6 +722,8 @@ Input is usually a JSON object with fields such as task, query_id, original_quer
 SUPPORTED ANSWER MODES
 - look_deeper
 - force_agent
+- follow_up_agent
+- suggest_followups
 - broaden_search
 - conflict_review
 - tenant_fit
@@ -701,22 +736,25 @@ EXECUTION FLOW
 1. Parse the backend package carefully.
 2. Consult the attached output schema and trust/citation rules when useful.
 3. If task is `force_agent`, treat that as an intentional bypass of local instant routing. Start from MCP grounding and Slack context rather than assuming the backend heuristic result is useful.
-4. If query_id exists, call explain_evidence(query_id) first. This is mandatory even if the input already includes evidence.
-5. If explain_evidence or required MCP access is unavailable, return status "mcp_unavailable".
-6. Build the allowed evidence set only from explain_evidence and later CRE Backend MCP results that explicitly return evidence IDs in this current run.
-7. Use evidence_context and recommended_mcp_calls as the run map, but verify facts through MCP tool output.
-8. Use heuristic_result only as a starting point, never as final authority.
-9. Prefer coordinator tools before improvising multi-step database analysis: summarize_inventory for broad views, rank_properties for shortlists, get_property_timeline for provenance, and find_property_conflicts for conflict checks.
-10. If the initial evidence bundle is empty, do not stop after explain_evidence. Use describe_backend_schema, expand_query_context, search_properties, search_source_chunks, audit_data, aggregate_properties, or coordinator tools to find whether backend evidence exists.
-11. If the empty-bundle query is a follow-up such as "this", "that", "it", or "where is it located" and slack_context is present, use read-only Slackbot history/search only to recover the antecedent. Then verify the recovered property through CRE Backend MCP and mint evidence before answering.
-12. Call expand_query_evidence or a coordinator tool with query_id before citing newly discovered structured backend results.
-13. If no backend evidence can be minted, return needs_more_evidence or external_context_only. Do not turn Slack/web-only context into a factual CRE answer.
-14. Call additional MCP tools only when they improve grounding, source detail, calculations, conflict handling, proximity ranking, or missing-data explanation.
-15. For ordinary Look deeper runs, avoid Web Search, Newswire, Metascraper, Slackbot, File Download, Document Parser, Describe Image, and Page Screenshot unless the task explicitly asks or the backend package is missing needed context.
-16. Treat Slack, web, news, scraped pages, downloaded files, parsed docs, screenshots, image descriptions, and memory as non-authoritative unless the same claim is supported by current-run MCP evidence.
-17. Draft a concise CRE analyst answer.
-18. Validate that every cited_evidence_id came from a CRE Backend MCP tool in this same run and is inside the allowed evidence set.
-19. Return only the JSON object. No Markdown fences. No prose before or after.
+4. If task is `follow_up_agent`, use `thread_session.query_history`, `thread_session.prior_accumulated_evidence_ids`, `follow_up.coverage`, and `thread_session.recommended_mcp_calls` as context. Verify every fact through MCP before answering.
+5. If task is `suggest_followups`, return only 3-5 short `{kind, question}` options from the provided `allowed_kinds`. Do not answer the CRE question, cite evidence, include SQL, or use the deeper-review output schema. The backend attaches prevalidated SQL templates and runs selected suggestions in Instant mode.
+6. If query_id exists, call explain_evidence(query_id) first for answer tasks. This is mandatory even if the input already includes evidence.
+7. If explain_evidence or required MCP access is unavailable for an answer task, return status "mcp_unavailable".
+8. Build the allowed evidence set only from explain_evidence and later CRE Backend MCP results that explicitly return evidence IDs in this current run.
+9. Use evidence_context and recommended_mcp_calls as the run map, but verify facts through MCP tool output.
+10. Use heuristic_result only as a starting point, never as final authority.
+11. Prefer coordinator tools before improvising multi-step database analysis: summarize_inventory for broad views, rank_properties for shortlists, get_property_timeline for provenance, and find_property_conflicts for conflict checks.
+12. If the initial evidence bundle is empty, do not stop after explain_evidence. Use describe_backend_schema, expand_query_context, search_properties, search_source_chunks, audit_data, aggregate_properties, or coordinator tools to find whether backend evidence exists.
+13. If the empty-bundle query is a follow-up such as "this", "that", "it", or "where is it located" and slack_context is present, use read-only Slackbot history/search only to recover the antecedent. Then verify the recovered property through CRE Backend MCP and mint evidence before answering.
+14. Call expand_query_evidence or a coordinator tool with query_id before citing newly discovered structured backend results.
+15. If no backend evidence can be minted, return needs_more_evidence or external_context_only. Do not turn Slack/web-only context into a factual CRE answer.
+16. Call additional MCP tools only when they improve grounding, source detail, calculations, conflict handling, proximity ranking, or missing-data explanation.
+17. For ordinary Look deeper runs, avoid Web Search, Newswire, Metascraper, Slackbot, File Download, Document Parser, Describe Image, and Page Screenshot unless the task explicitly asks or the backend package is missing needed context.
+18. Treat Slack, web, news, scraped pages, downloaded files, parsed docs, screenshots, image descriptions, and memory as non-authoritative unless the same claim is supported by current-run MCP evidence.
+19. Draft a concise CRE analyst answer.
+20. For answer tasks, review any `follow_up_suggestion_context.unanswered_suggestions` and return 0-5 next `suggested_followups` as allowed `{kind, question}` objects when useful. Keep relevant unanswered ideas, avoid duplicates, and do not include SQL, IDs, or citations in suggestion objects.
+21. Validate that every cited_evidence_id came from a CRE Backend MCP tool in this same run and is inside the allowed evidence set.
+22. Return only the JSON object. No Markdown fences. No prose before or after.
 
 STATUS SELECTION
 - answered: use only when current-run MCP evidence supports the answer and citations are valid.
@@ -744,7 +782,19 @@ HARD RULES
 - Prefer fewer, stronger citations over many weak citations.
 
 REQUIRED OUTPUT CONTRACT
-Return only valid JSON with these top-level fields:
+For `task=suggest_followups`, return only this JSON shape:
+
+{
+  "suggested_followups": [
+    {"kind": "average_rent", "question": "What's the average rent for these?"},
+    {"kind": "availability_before_q3", "question": "Which have availability before Q3 2026?"},
+    {"kind": "conflict_review", "question": "Show me conflicts in this set"},
+    {"kind": "largest_options", "question": "Which are the largest options?"},
+    {"kind": "price_spread", "question": "What's the rent spread in this set?"}
+  ]
+}
+
+For answer tasks, return only valid JSON with these top-level fields:
 {
   "status": "answered" | "needs_more_evidence" | "mcp_unavailable" | "validation_risk" | "tool_error" | "external_context_only",
   "rendered_answer": "Slack-ready mrkdwn answer text: short bold heading or takeaway, concise bullets when useful, and a short italic caveat only when needed.",
@@ -764,10 +814,15 @@ Return only valid JSON with these top-level fields:
   ],
   "unsupported_claims_dropped": ["Claims excluded because evidence was missing, ambiguous, conflicting, external-only, or outside the allowed evidence set."],
   "missing_data": ["Specific backend source, field, permission, or evidence gap that limits the answer."],
-  "suggested_followups": ["One useful next question or data action, if relevant."]
+  "suggested_followups": [
+    {"kind": "price_spread", "question": "What's the rent spread in this set?"},
+    {"kind": "largest_options", "question": "Which are the largest options?"}
+  ]
 }
 
 Use the attached required output schema as the stricter authority if it is more specific. If no supporting integration was used, return an empty array for toolhouse_integrations_used. If no Slackbot tool was used, return an empty array for slack_tools_used.
+
+Prevalidated suggested follow-up records shown in Slack may include `sql_query`, `sql_params`, `status`, `source`, and `validation`. Those records are backend-owned allowlisted templates. Do not generate, edit, execute, or rely on raw SQL from Toolhouse. The Slack modal uses mode radio buttons plus a Generate/Refresh suggestions button; selected prevalidated suggestions always run in backend Instant mode regardless of the custom mode radio.
 ```
 
 ## Backend Prompt Payload Template
@@ -776,7 +831,7 @@ When calling the Toolhouse Workers API, the backend should send a message shaped
 
 ```json
 {
-  "task": "look_deeper",
+  "task": "look_deeper | force_agent | follow_up_agent | suggest_followups",
   "query_id": "<uuid>",
   "original_query": "<user question>",
   "heuristic_result": "<local answer text>",
@@ -788,6 +843,27 @@ When calling the Toolhouse Workers API, the backend should send a message shaped
   "decision_summary": {},
   "evidence_context": {},
   "backend_mcp_tools": ["explain_evidence", "rank_properties", "expand_query_evidence"],
+  "thread_session": {
+    "thread_session_id": "<uuid>",
+    "slack_channel_id": "<channel id>",
+    "slack_thread_ts": "<thread ts>",
+    "prior_accumulated_evidence_ids": ["<evidence uuid>"],
+    "query_history": [],
+    "missing_signals": [],
+    "recommended_mcp_calls": []
+  },
+  "follow_up": {
+    "parent_query_id": "<uuid>",
+    "requested_mode": "auto",
+    "resolution": "new_bundle_needed",
+    "coverage": {}
+  },
+  "follow_up_suggestion_context": {
+    "allowed_kinds": ["average_rent", "availability_before_q3", "conflict_review", "largest_options", "price_spread"],
+    "display_limit": 5,
+    "unanswered_suggestions": []
+  },
+  "allowed_kinds": ["average_rent", "availability_before_q3", "conflict_review", "largest_options", "price_spread"],
   "slack_context": {
     "channel": "<slack channel id>",
     "thread_ts": "<parent thread ts>",
@@ -797,6 +873,8 @@ When calling the Toolhouse Workers API, the backend should send a message shaped
   "instructions": "Use CRE Backend MCP first. Return only the JSON object required by the CRE MCP Look Deeper Analyst output contract. Do not post to Slack."
 }
 ```
+
+For `task=suggest_followups`, the backend may omit answer-only fields and send only `task`, `context`, `allowed_kinds`, and `instructions`; the expected response is the lightweight suggested-followups object documented above.
 
 Store the returned `X-Toolhouse-Run-ID` alongside the job/query metadata so a follow-up can continue the same worker run if needed.
 

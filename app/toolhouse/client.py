@@ -95,7 +95,12 @@ def parse_toolhouse_response_payload(raw_response: str) -> tuple[dict[str, Any] 
 
 def build_toolhouse_message(escalation_payload: dict[str, Any]) -> str:
     reason_codes = {str(value) for value in escalation_payload.get("reason_codes") or []}
-    task = "force_agent" if "force_agent" in reason_codes else "look_deeper"
+    if "follow_up_agent" in reason_codes:
+        task = "follow_up_agent"
+    elif "force_agent" in reason_codes:
+        task = "force_agent"
+    else:
+        task = "look_deeper"
     message_payload = {
         **escalation_payload,
         "task": task,
@@ -108,6 +113,9 @@ def build_toolhouse_message(escalation_payload: dict[str, Any]) -> str:
             "search_source_chunks, get_source_detail, nearby_properties, and audit_data as needed. "
             "If task is force_agent, the user intentionally bypassed instant routing; recover thread context when needed, "
             "then ground the answer through CRE Backend MCP before writing. "
+            "If task is follow_up_agent, use thread_session.query_history, prior_accumulated_evidence_ids, "
+            "follow_up.coverage.missing_signals, and recommended MCP calls to decide whether the prior bundle is enough "
+            "or whether backend MCP must expand evidence before answering. "
             "If the initial evidence bundle is empty, do not stop after explain_evidence: use backend MCP search, "
             "schema, audit, aggregate, or coordinator tools to find citable backend evidence. If slack_context is present "
             "and the user asked a follow-up such as 'this', 'that', or 'where is it located', read Slack history only for "
@@ -118,10 +126,55 @@ def build_toolhouse_message(escalation_payload: dict[str, Any]) -> str:
             "the backend instant-answer style: use a short bold heading or takeaway, 2 to 4 concise bullets max, "
             "no mode labels, no trust-receipt boilerplate, and only a short italic caveat when it materially helps. "
             "When comparing 2 to 5 properties, you may include a compact comparison_table object instead of repeating "
-            "all facts in prose."
+            "all facts in prose. After every answer task, also return suggested_followups as 0 to 5 short "
+            "{kind, question} objects for the next Slack follow-up modal. kind must be one of "
+            "average_rent, availability_before_q3, conflict_review, largest_options, or price_spread. Review "
+            "follow_up_suggestion_context.unanswered_suggestions when present; keep still-relevant unanswered options, "
+            "avoid duplicates, and add only useful next questions. Do not include SQL in suggested_followups; the backend "
+            "attaches prevalidated SQL templates and selects the top options for display."
         ),
     }
     return json.dumps(message_payload, indent=2, sort_keys=True)
+
+
+def _slack_thread_for_suggestions(escalation_payload: dict[str, Any]) -> tuple[str, str]:
+    thread_session = escalation_payload.get("thread_session") if isinstance(escalation_payload.get("thread_session"), dict) else {}
+    slack_context = escalation_payload.get("slack_context") if isinstance(escalation_payload.get("slack_context"), dict) else {}
+    channel_id = str(thread_session.get("slack_channel_id") or slack_context.get("channel_id") or "")
+    thread_ts = str(thread_session.get("slack_thread_ts") or slack_context.get("thread_ts") or slack_context.get("message_ts") or "")
+    return channel_id, thread_ts
+
+
+def _parent_query_for_suggestions(escalation_payload: dict[str, Any], query_id: str) -> str:
+    follow_up = escalation_payload.get("follow_up") if isinstance(escalation_payload.get("follow_up"), dict) else {}
+    parent_query_id = str(follow_up.get("parent_query_id") or "")
+    return parent_query_id or query_id
+
+
+async def _store_toolhouse_answer_followups(
+    *,
+    response_payload: dict[str, Any],
+    query_id: str,
+    escalation_payload: dict[str, Any],
+    toolhouse_run_id: str | None,
+) -> list[dict[str, object]]:
+    channel_id, thread_ts = _slack_thread_for_suggestions(escalation_payload)
+    if not channel_id or not thread_ts:
+        return []
+    evidence_ids = [str(value) for value in escalation_payload.get("allowed_evidence_ids", [])]
+    if not evidence_ids:
+        return []
+    from app.answering.follow_up_suggestions import store_agent_follow_up_suggestions
+
+    return await store_agent_follow_up_suggestions(
+        response_payload=response_payload,
+        query_id=query_id,
+        slack_channel_id=channel_id,
+        slack_thread_ts=thread_ts,
+        parent_query_id=_parent_query_for_suggestions(escalation_payload, query_id),
+        evidence_ids=evidence_ids,
+        toolhouse_run_id=toolhouse_run_id,
+    )
 
 
 def _configured_client() -> ToolhouseClient | None:
@@ -328,6 +381,18 @@ async def run_toolhouse_deeper_review(
         "toolhouse_response": response_payload,
         "escalation_payload": validation_payload,
     }
+    try:
+        next_follow_up_suggestions = await _store_toolhouse_answer_followups(
+            response_payload=response_payload,
+            query_id=query_id,
+            escalation_payload=validation_payload,
+            toolhouse_run_id=result.run_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        next_follow_up_suggestions = []
+        payload["next_follow_up_suggestion_error"] = str(exc)
+    if next_follow_up_suggestions:
+        payload["next_follow_up_suggestions"] = next_follow_up_suggestions
     await _finish_agent_run(
         agent_run_id,
         provider="toolhouse",
