@@ -12,6 +12,7 @@ The point is not to make Slack feel like a chatbot. The point is to help a broke
 - It uses Postgres for exact facts: filters, proximity, aggregation, source lookup, and conflict handling.
 - It uses BM25S, PolyFuzz, TF-IDF character n-grams, optional Qdrant, and reranking when the question depends on source text, such as loading access or yard space.
 - It gives the user Slack actions: `Show sources` for supporting rows/pages/messages, and `Look deeper` for Toolhouse review or a zero-evidence recovery pass.
+- It also supports `/force-agent`, a `Force agent` button, a message shortcut, and thread-aware auto-escalation when a contextual follow-up looks too ambiguous for the local router.
 - It lets Toolhouse coordinate through a narrow MCP surface for schema, context, search, aggregation, inventory summaries, rankings, timelines, conflicts, and query-scoped evidence expansion.
 - It validates Toolhouse citations against backend evidence IDs before posting a deeper answer.
 - It can replay answers, run golden evals, execute readiness checks, and generate a submission report.
@@ -760,7 +761,7 @@ There are two names here, and they do different jobs. `instant_answer` is the de
 
 The normal flow is predictable: route the question, retrieve evidence, render the answer, save the evidence, save the snapshot, and post the Slack reply with actions.
 
-Agent mode starts only when the user clicks `Look deeper` or an operator runs the deeper-review path. The payload comes from `explain-query`: local answer, route details, filters, allowed evidence IDs, evidence bundle, field details, decision summary, Slack context when available, and an `evidence_context` map with coverage counts, source manifests, available MCP tools, and recommended calls.
+Agent mode starts when the user clicks `Look deeper`, clicks `Force agent`, sends `/force-agent`, uses the message shortcut, or hits an automatic thread escalation on a contextual low-confidence follow-up. The payload comes from `explain-query`: local answer when one exists, route details, filters, allowed evidence IDs, evidence bundle, field details, decision summary, Slack context when available, and an `evidence_context` map with coverage counts, source manifests, available MCP tools, and recommended calls.
 
 Toolhouse can use that map to call the CRE Backend MCP for a smarter second pass. The useful new bit is the coordinator layer: `summarize_inventory`, `rank_properties`, `get_property_timeline`, and `find_property_conflicts`. Those tools let Toolhouse inspect the database like an analyst without raw SQL or destructive access. If the starting bundle is empty, Toolhouse can try backend search/coordinator tools and, for follow-up wording, read Slack history only to recover the antecedent. Any factual CRE answer still has to mint or reuse backend evidence IDs first; otherwise it returns `needs_more_evidence` or `external_context_only`.
 
@@ -796,6 +797,7 @@ A broker can ask:
 | `Which options look best for a logistics tenant under $35/SF available soon?` | Local tenant-fit synthesis first; Toolhouse can then call backend ranking and conflict tools for the deeper read. |
 | `Why did you use 62k sq ft for Harbor Rd?` | Freshness and authority conflict handling with selected, supporting, and superseded evidence. |
 | `Look deeper` | Toolhouse review over the allowed evidence bundle, or a zero-evidence MCP broadening pass with backend citation validation. |
+| `/force-agent where is this located and what is the best use case` | Direct-to-Toolhouse path for ambiguous follow-ups when the user wants MCP grounding before any local instant interpretation. |
 
 Every factual answer includes a small source receipt: which route was used, how many evidence items were checked, and why those sources were selected. `Show sources` opens the rows, pages, files, and Slack messages behind the answer. `replay-query` rebuilds the stored answer outside Slack.
 

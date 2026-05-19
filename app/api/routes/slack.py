@@ -25,3 +25,8 @@ async def slack_events(request: Request):
 @router.post("/interactivity")
 async def slack_interactivity(request: Request):
     return await _handle_slack_request(request)
+
+
+@router.post("/commands")
+async def slack_commands(request: Request):
+    return await _handle_slack_request(request)

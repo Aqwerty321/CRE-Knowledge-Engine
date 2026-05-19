@@ -325,7 +325,7 @@ async def run_local_deeper_review(query_id: str) -> dict[str, Any]:
         }
 
     return {
-        "status": "answered",
+        "status": str(local_response.get("status") or "answered"),
         "answer_mode": "agent_mode",
         "query_id": query_id,
         "rendered_answer": local_response["rendered_answer"],

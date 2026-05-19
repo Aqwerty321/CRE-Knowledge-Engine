@@ -10,7 +10,14 @@ from slack_bolt.authorization.authorize_result import AuthorizeResult
 from app.config import get_settings
 from app.ingestion.slack_ingestor import enqueue_slack_ingestion_event
 from app.slack.gateway import get_slack_gateway
-from app.slack.service import enqueue_app_mention_event, handle_look_deeper_action, handle_show_sources_action
+from app.slack.service import (
+    enqueue_app_mention_event,
+    handle_force_agent_action,
+    handle_force_agent_command,
+    handle_force_agent_message_shortcut,
+    handle_look_deeper_action,
+    handle_show_sources_action,
+)
 
 _request_headers_var: ContextVar[dict[str, str]] = ContextVar("slack_request_headers", default={})
 
@@ -59,6 +66,31 @@ def get_slack_app() -> AsyncApp:
     async def handle_file_shared_event(body: dict[str, object]) -> None:
         await enqueue_slack_ingestion_event(body, get_current_slack_request_headers())
 
+    @slack_app.command("/force-agent")
+    async def handle_force_agent(ack, body: dict[str, object]) -> None:
+        await ack()
+        await handle_force_agent_command(
+            query_text=str(body.get("text") or ""),
+            channel_id=str(body.get("channel_id") or ""),
+            user_id=str(body.get("user_id") or ""),
+            team_id=str(body.get("team_id") or "") or None,
+            thread_ts=str(body.get("thread_ts") or body.get("message_ts") or "") or None,
+            query_ts=str(body.get("message_ts") or "") or None,
+            slack_gateway=get_slack_gateway(),
+        )
+
+    @slack_app.shortcut("force_agent_message_shortcut")
+    async def handle_force_agent_shortcut(ack, body: dict[str, object]) -> None:
+        await ack()
+        message = body.get("message", {}) if isinstance(body.get("message"), dict) else {}
+        await handle_force_agent_message_shortcut(
+            message_payload=message,
+            channel_id=str(body.get("channel", {}).get("id") or ""),
+            user_id=str(body.get("user", {}).get("id") or ""),
+            team_id=str(body.get("team", {}).get("id") or body.get("team_id") or "") or None,
+            slack_gateway=get_slack_gateway(),
+        )
+
     @slack_app.action("show_sources")
     async def handle_show_sources(ack, body: dict[str, object], action: dict[str, object]) -> None:
         await ack()
@@ -76,6 +108,18 @@ def get_slack_app() -> AsyncApp:
         await ack()
         container = body.get("container", {}) if isinstance(body.get("container"), dict) else {}
         await handle_look_deeper_action(
+            query_id=str(action.get("value") or ""),
+            channel_id=str(body.get("channel", {}).get("id") or ""),
+            user_id=str(body.get("user", {}).get("id") or ""),
+            thread_ts=str(container.get("thread_ts") or container.get("message_ts") or ""),
+            slack_gateway=get_slack_gateway(),
+        )
+
+    @slack_app.action("force_agent_query")
+    async def handle_force_agent_query(ack, body: dict[str, object], action: dict[str, object]) -> None:
+        await ack()
+        container = body.get("container", {}) if isinstance(body.get("container"), dict) else {}
+        await handle_force_agent_action(
             query_id=str(action.get("value") or ""),
             channel_id=str(body.get("channel", {}).get("id") or ""),
             user_id=str(body.get("user", {}).get("id") or ""),

@@ -65,7 +65,7 @@ async def _prepare_slack_database() -> None:
             await session.execute(delete(AnswerSnapshot))
             await session.execute(delete(EvidenceItem))
             await session.execute(delete(Query))
-            await session.execute(delete(IngestionJob).where(IngestionJob.job_type == "answer_query"))
+            await session.execute(delete(IngestionJob).where(IngestionJob.job_type.in_(["answer_query", "look_deeper", "force_agent"])))
             await session.execute(delete(SlackEvent))
 
 
@@ -124,6 +124,14 @@ async def _load_properties_for_slack_ts(slack_ts: str) -> list[PropertyRecord]:
 async def _load_latest_query() -> Query | None:
     async with SessionFactory() as session:
         result = await session.execute(select(Query).order_by(Query.created_at.desc()).limit(1))
+        return result.scalar_one_or_none()
+
+
+async def _load_latest_job(job_type: str) -> IngestionJob | None:
+    async with SessionFactory() as session:
+        result = await session.execute(
+            select(IngestionJob).where(IngestionJob.job_type == job_type).order_by(IngestionJob.created_at.desc()).limit(1)
+        )
         return result.scalar_one_or_none()
 
 
@@ -216,6 +224,27 @@ def _unsupported_app_mention_payload(channel_id: str = "C_CRE_LISTINGS_DEMO") ->
     event = dict(payload["event"])
     event["text"] = "<@U_BOT> where is this located"
     event["ts"] = "1715860000.000200"
+    payload["event"] = event
+    return payload
+
+
+def _auto_force_agent_thread_follow_up_payload(channel_id: str = "C_CRE_LISTINGS_DEMO") -> dict[str, object]:
+    payload = _app_mention_payload(channel_id)
+    payload["event_id"] = "Ev_test_app_mention_auto_force_agent_1"
+    event = dict(payload["event"])
+    event["text"] = "<@U_BOT> where is this located and what is the best use case"
+    event["ts"] = "1715860000.000250"
+    event["thread_ts"] = "1715860000.000100"
+    payload["event"] = event
+    return payload
+
+
+def _force_agent_app_mention_payload(channel_id: str = "C_CRE_LISTINGS_DEMO") -> dict[str, object]:
+    payload = _app_mention_payload(channel_id)
+    payload["event_id"] = "Ev_test_app_mention_force_agent_1"
+    event = dict(payload["event"])
+    event["text"] = "<@U_BOT> /force-agent where is this located and what is the best use case"
+    event["ts"] = "1715860000.000300"
     event["thread_ts"] = "1715860000.000100"
     payload["event"] = event
     return payload
@@ -327,6 +356,55 @@ def _look_deeper_payload(query_id: str) -> dict[str, object]:
     return payload
 
 
+def _force_agent_action_payload(query_id: str) -> dict[str, object]:
+    payload = _interactivity_payload(query_id)
+    payload["actions"] = [{"action_id": "force_agent_query", "value": query_id}]
+    return payload
+
+
+def _force_agent_command_body(query_text: str = "where is this located and what is the best use case") -> str:
+    return urlencode(
+        {
+            "token": "ignored",
+            "team_id": "T_CRE_DEMO",
+            "team_domain": "cre-demo",
+            "channel_id": "C_CRE_LISTINGS_DEMO",
+            "channel_name": "cre-listings",
+            "user_id": "U_REQUESTOR",
+            "user_name": "aadityasoni2020",
+            "command": "/force-agent",
+            "text": query_text,
+            "api_app_id": "A_CRE_DEMO",
+            "trigger_id": "13345224609.738474920.8088930838d88f008e0",
+            "response_url": "https://example.com/response",
+        }
+    )
+
+
+def _message_shortcut_payload(
+    message_text: str = "where is this located and what is the best use case",
+    *,
+    message_ts: str = "1715860000.000350",
+    thread_ts: str = "1715860000.000100",
+) -> dict[str, object]:
+    return {
+        "type": "message_action",
+        "callback_id": "force_agent_message_shortcut",
+        "trigger_id": "13345224609.738474920.8088930838d88f008e1",
+        "team": {"id": "T_CRE_DEMO"},
+        "user": {"id": "U_REQUESTOR"},
+        "channel": {"id": "C_CRE_LISTINGS_DEMO"},
+        "message": {
+            "type": "message",
+            "user": "U_REQUESTOR",
+            "text": message_text,
+            "ts": message_ts,
+            "thread_ts": thread_ts,
+        },
+        "response_url": "https://example.com/response",
+    }
+
+
 def _find_actions_block(blocks: list[dict[str, object]]) -> dict[str, object]:
     for block in blocks:
         if block.get("type") == "actions":
@@ -369,6 +447,55 @@ def test_app_mention_ignores_unconfigured_channel(prepared_slack_db: None, async
     counts = async_runner.run(_counts())
     assert counts["slack_events"] == 1
     assert counts["query_jobs"] == 0
+
+
+@pytest.mark.golden
+def test_force_agent_app_mention_queues_direct_agent_job(
+    prepared_slack_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = _force_agent_app_mention_payload()
+    body = json.dumps(payload)
+    headers = {"content-type": "application/json", **_signed_headers("test-signing-secret", body)}
+
+    response = async_runner.run(_post_request("/slack/events", content=body, headers=headers))
+    assert response.status_code == 200
+
+    counts = async_runner.run(_counts())
+    assert counts["query_jobs"] == 0
+    job = async_runner.run(_load_latest_job("force_agent"))
+    assert job is not None
+    assert job.checkpoint_json["query_text"] == "where is this located and what is the best use case"
+    assert job.checkpoint_json["original_query_text"].startswith("/force-agent")
+    assert job.checkpoint_json["thread_ts"] == "1715860000.000100"
+
+
+@pytest.mark.golden
+def test_force_agent_slash_command_queues_job_and_posts_ephemeral(
+    prepared_slack_db: None,
+    async_runner: asyncio.Runner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.slack import runtime as slack_runtime
+
+    fake_gateway = RecordingSlackGateway()
+    monkeypatch.setattr(slack_runtime, "get_slack_gateway", lambda: fake_gateway)
+    get_slack_app.cache_clear()
+    get_slack_handler.cache_clear()
+
+    body = _force_agent_command_body()
+    headers = {"content-type": "application/x-www-form-urlencoded", **_signed_headers("test-signing-secret", body)}
+
+    response = async_runner.run(_post_request("/slack/commands", content=body, headers=headers))
+    assert response.status_code == 200
+    assert fake_gateway.ephemeral_replies
+    assert fake_gateway.ephemeral_replies[-1]["text"] == "On it. Force-agent mode is going straight to Toolhouse with backend MCP checks."
+
+    job = async_runner.run(_load_latest_job("force_agent"))
+    assert job is not None
+    assert job.checkpoint_json["event_type"] == "slash_command"
+    assert job.checkpoint_json["thread_ts"] == ""
+    assert job.checkpoint_json["query_text"] == "where is this located and what is the best use case"
 
 
 @pytest.mark.golden
@@ -534,6 +661,11 @@ def test_build_answer_blocks_adds_compact_trust_receipt_and_table() -> None:
     assert blocks[2]["type"] == "context"
     assert "Instant answer" in blocks[2]["elements"][0]["text"]
     assert blocks[3]["type"] == "actions"
+    assert [element["action_id"] for element in blocks[3]["elements"]] == [
+        "show_sources",
+        "look_deeper",
+        "force_agent_query",
+    ]
 
 
 @pytest.mark.golden
@@ -568,6 +700,7 @@ def test_query_worker_posts_threaded_answer_with_show_sources_button(
     assert action_element["action_id"] == "show_sources"
     assert UUID(action_element["value"])
     assert actions_block["elements"][1]["action_id"] == "look_deeper"
+    assert actions_block["elements"][2]["action_id"] == "force_agent_query"
 
     latest_query = async_runner.run(_load_latest_query())
     assert latest_query is not None
@@ -594,14 +727,156 @@ def test_zero_evidence_slack_answer_offers_look_deeper_only(
     assert processed[0]["answer_status"] == "unsupported"
     posted_reply = gateway.thread_replies[0]
     actions_block = _find_actions_block(posted_reply["blocks"])
-    assert [element["action_id"] for element in actions_block["elements"]] == ["look_deeper"]
+    assert [element["action_id"] for element in actions_block["elements"]] == ["look_deeper", "force_agent_query"]
     assert "Use *Look deeper*" in posted_reply["text"]
 
     query_id = actions_block["elements"][0]["value"]
     explain_payload = async_runner.run(explain_query(query_id))
     assert explain_payload["evidence_count"] == 0
     assert explain_payload["slack_context"]["message_ts"] == "1715860000.000200"
+    assert explain_payload["slack_context"]["thread_ts"] == "1715860000.000200"
+
+
+@pytest.mark.golden
+def test_auto_force_agent_thread_follow_up_queues_direct_agent_job(
+    prepared_slack_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = _auto_force_agent_thread_follow_up_payload()
+    body = json.dumps(payload)
+    headers = {"content-type": "application/json", **_signed_headers("test-signing-secret", body)}
+
+    response = async_runner.run(_post_request("/slack/events", content=body, headers=headers))
+    assert response.status_code == 200
+
+    counts = async_runner.run(_counts())
+    assert counts["query_jobs"] == 0
+    job = async_runner.run(_load_latest_job("force_agent"))
+    assert job is not None
+    assert job.checkpoint_json["query_text"] == "where is this located and what is the best use case"
+    assert job.checkpoint_json["force_agent_source"] == "auto_thread_follow_up"
+    assert job.checkpoint_json["force_agent_reason_codes"] == ["auto_thread_follow_up"]
+
+
+@pytest.mark.golden
+def test_auto_force_agent_thread_follow_up_bypasses_instant_router_and_preserves_reason_code(
+    prepared_slack_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = _auto_force_agent_thread_follow_up_payload()
+    body = json.dumps(payload)
+    headers = {"content-type": "application/json", **_signed_headers("test-signing-secret", body)}
+
+    response = async_runner.run(_post_request("/slack/events", content=body, headers=headers))
+    assert response.status_code == 200
+
+    gateway = RecordingSlackGateway()
+    processed = async_runner.run(process_pending_query_jobs(slack_gateway=gateway, limit=1))
+
+    assert processed[0]["job_type"] == "force_agent"
+    assert processed[0]["force_agent"] is True
+    assert processed[0]["pending_message_ts"] == gateway.thread_replies[0]["ts"]
+    assert gateway.thread_replies[0]["thread_ts"] == "1715860000.000100"
+
+    query = async_runner.run(_load_latest_query())
+    assert query is not None
+    explain_payload = async_runner.run(explain_query(str(query.id)))
+    assert explain_payload["reason_codes"] == ["force_agent", "instant_router_skipped", "auto_thread_follow_up"]
+    assert explain_payload["slack_context"]["message_ts"] == "1715860000.000250"
     assert explain_payload["slack_context"]["thread_ts"] == "1715860000.000100"
+
+
+@pytest.mark.golden
+def test_force_agent_job_bypasses_instant_router_and_posts_agent_mode(
+    prepared_slack_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = _force_agent_app_mention_payload()
+    body = json.dumps(payload)
+    headers = {"content-type": "application/json", **_signed_headers("test-signing-secret", body)}
+
+    response = async_runner.run(_post_request("/slack/events", content=body, headers=headers))
+    assert response.status_code == 200
+
+    gateway = RecordingSlackGateway()
+    processed = async_runner.run(process_pending_query_jobs(slack_gateway=gateway, limit=1))
+
+    assert processed[0]["job_type"] == "force_agent"
+    assert processed[0]["force_agent"] is True
+    assert processed[0]["answer_mode"] == "agent_mode"
+    assert processed[0]["deeper_review_status"] == "needs_more_evidence"
+    assert processed[0]["pending_message_ts"] == gateway.thread_replies[0]["ts"]
+    assert gateway.thread_replies[0]["thread_ts"] == "1715860000.000100"
+    assert gateway.updated_messages
+    assert gateway.thread_replies[0]["text"].startswith("_Mode: Agent mode - local deeper review_")
+
+    query = async_runner.run(_load_latest_query())
+    assert query is not None
+    assert query.route_mode == "agent_forced"
+    assert query.query_text == "where is this located and what is the best use case"
+
+    explain_payload = async_runner.run(explain_query(str(query.id)))
+    assert explain_payload["reason_codes"] == ["force_agent", "instant_router_skipped"]
+    assert explain_payload["slack_context"]["message_ts"] == "1715860000.000300"
+    assert explain_payload["slack_context"]["thread_ts"] == "1715860000.000100"
+
+
+@pytest.mark.golden
+def test_force_agent_slash_command_posts_channel_update_without_thread(
+    prepared_slack_db: None,
+    async_runner: asyncio.Runner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.slack import runtime as slack_runtime
+
+    fake_gateway = RecordingSlackGateway()
+    monkeypatch.setattr(slack_runtime, "get_slack_gateway", lambda: fake_gateway)
+    get_slack_app.cache_clear()
+    get_slack_handler.cache_clear()
+
+    body = _force_agent_command_body()
+    headers = {"content-type": "application/x-www-form-urlencoded", **_signed_headers("test-signing-secret", body)}
+    response = async_runner.run(_post_request("/slack/commands", content=body, headers=headers))
+    assert response.status_code == 200
+
+    processed = async_runner.run(process_pending_query_jobs(slack_gateway=fake_gateway, limit=1))
+
+    assert processed[0]["job_type"] == "force_agent"
+    assert processed[0]["force_agent"] is True
+    assert processed[0]["deeper_review_status"] == "needs_more_evidence"
+    assert fake_gateway.thread_replies[0]["thread_ts"] == ""
+    assert fake_gateway.updated_messages
+    assert fake_gateway.thread_replies[0]["text"].startswith("_Mode: Agent mode - local deeper review_")
+
+
+@pytest.mark.golden
+def test_force_agent_message_shortcut_queues_threaded_direct_agent_job(
+    prepared_slack_db: None,
+    async_runner: asyncio.Runner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.slack import runtime as slack_runtime
+
+    fake_gateway = RecordingSlackGateway()
+    monkeypatch.setattr(slack_runtime, "get_slack_gateway", lambda: fake_gateway)
+    get_slack_app.cache_clear()
+    get_slack_handler.cache_clear()
+
+    shortcut_payload = _message_shortcut_payload()
+    form_body = urlencode({"payload": json.dumps(shortcut_payload)})
+    headers = {"content-type": "application/x-www-form-urlencoded", **_signed_headers("test-signing-secret", form_body)}
+
+    response = async_runner.run(_post_request("/slack/interactivity", content=form_body, headers=headers))
+    assert response.status_code == 200
+    assert fake_gateway.ephemeral_replies[-1]["thread_ts"] == "1715860000.000100"
+    assert fake_gateway.ephemeral_replies[-1]["text"] == "On it. Force-agent mode is going straight to Toolhouse with backend MCP checks."
+
+    job = async_runner.run(_load_latest_job("force_agent"))
+    assert job is not None
+    assert job.checkpoint_json["query_text"] == "where is this located and what is the best use case"
+    assert job.checkpoint_json["thread_ts"] == "1715860000.000100"
+    assert job.checkpoint_json["query_ts"] == "1715860000.000350"
+    assert job.checkpoint_json["event_type"] == "message_shortcut"
 
 
 @pytest.mark.golden
@@ -723,6 +998,48 @@ def test_look_deeper_action_enqueues_and_posts_local_deeper_review(
 
     assert processed[0]["answer_mode"] == "agent_mode"
     assert processed[0]["deeper_review_status"] == "answered"
+
+
+@pytest.mark.golden
+def test_force_agent_button_action_enqueues_direct_agent_review(
+    prepared_slack_db: None,
+    async_runner: asyncio.Runner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.slack import runtime as slack_runtime
+
+    fake_gateway = RecordingSlackGateway()
+    monkeypatch.setattr(slack_runtime, "get_slack_gateway", lambda: fake_gateway)
+    get_slack_app.cache_clear()
+    get_slack_handler.cache_clear()
+
+    payload = _app_mention_payload()
+    body = json.dumps(payload)
+    headers = {"content-type": "application/json", **_signed_headers("test-signing-secret", body)}
+    enqueue_response = async_runner.run(_post_request("/slack/events", content=body, headers=headers))
+    assert enqueue_response.status_code == 200
+    async_runner.run(process_pending_query_jobs(slack_gateway=fake_gateway, limit=1))
+
+    query_id = _find_actions_block(fake_gateway.thread_replies[0]["blocks"])["elements"][2]["value"]
+    action_payload = _force_agent_action_payload(query_id)
+    form_body = urlencode({"payload": json.dumps(action_payload)})
+    action_headers = {
+        "content-type": "application/x-www-form-urlencoded",
+        **_signed_headers("test-signing-secret", form_body),
+    }
+
+    action_response = async_runner.run(_post_request("/slack/interactivity", content=form_body, headers=action_headers))
+    assert action_response.status_code == 200
+    assert fake_gateway.ephemeral_replies[-1]["thread_ts"] == "1715860000.000100"
+    assert fake_gateway.ephemeral_replies[-1]["text"] == "On it. Force-agent mode is going straight to Toolhouse with backend MCP checks."
+
+    job = async_runner.run(_load_latest_job("force_agent"))
+    assert job is not None
+    assert job.checkpoint_json["query_text"] == "Show office buildings under $50/sq ft."
+    assert job.checkpoint_json["thread_ts"] == "1715860000.000100"
+    assert job.checkpoint_json["event_type"] == "force_agent_action"
+
+    processed = async_runner.run(process_pending_query_jobs(slack_gateway=fake_gateway, limit=1))
     assert processed[0]["pending_message_ts"] == fake_gateway.thread_replies[-1]["ts"]
     assert processed[0]["validation"]["valid"] is True
     assert fake_gateway.updated_messages

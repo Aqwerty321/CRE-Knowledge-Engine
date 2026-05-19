@@ -14,6 +14,7 @@ Toolhouse should act as the deeper-analysis worker. The local backend remains th
 - Demo reference date for availability parsing: 2026-05-17.
 - Slack request mode: HTTP Events API / interactivity, not Socket Mode.
 - Slack `Look deeper` behavior: backend ACKs immediately, queues work, validates the agent response, then posts to the original thread.
+- Slack `/force-agent` behavior: backend queues Toolhouse directly, still persists a replayable query package, and validates citations before posting.
 
 ## MCP Server And Backend Tool Surface
 
@@ -187,3 +188,10 @@ The correct first live demo is:
 5. Toolhouse returns strict JSON.
 6. Backend validates the output contract and cited evidence IDs.
 7. Backend posts only validated content to Slack.
+
+The direct follow-up variant is:
+
+1. User sends `/force-agent <question>`.
+2. Backend skips the instant router but still creates a replayable query package.
+3. Toolhouse starts from backend MCP and Slack context.
+4. Backend validates citations and posts the result to Slack.

@@ -40,3 +40,17 @@ def test_build_toolhouse_message_preserves_query_package_shape() -> None:
     assert "return needs_more_evidence or external_context_only" in message
     assert "Keep rendered_answer terse and aligned with the backend instant-answer style" in message
     assert "comparison_table object" in message
+
+
+def test_build_toolhouse_message_marks_force_agent_task() -> None:
+    message = build_toolhouse_message(
+        {
+            "status": "ready",
+            "query_id": "query-1",
+            "reason_codes": ["force_agent", "instant_router_skipped"],
+            "allowed_evidence_ids": [],
+        }
+    )
+
+    assert '"task": "force_agent"' in message
+    assert "the user intentionally bypassed instant routing" in message

@@ -6,7 +6,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 
-from app.answering.query_service import answer_query
+from app.answering.query_service import answer_query, create_force_agent_query
 from app.db.session import SessionFactory
 from app.ingestion.slack_ingestor import INGEST_JOB_TYPES, process_slack_ingestion_job
 from app.models import IngestionJob
@@ -43,7 +43,7 @@ async def _claim_query_job_ids(limit: int) -> list[UUID]:
             result = await session.execute(
                 select(IngestionJob)
                 .where(
-                    IngestionJob.job_type.in_(["answer_query", "look_deeper", *sorted(INGEST_JOB_TYPES)]),
+                    IngestionJob.job_type.in_(["answer_query", "look_deeper", "force_agent", *sorted(INGEST_JOB_TYPES)]),
                     IngestionJob.status == "queued",
                 )
                 .order_by(IngestionJob.created_at)
@@ -110,13 +110,28 @@ async def process_pending_query_jobs(slack_gateway: SlackGateway | None = None, 
                 checkpoint = dict(job.checkpoint_json)
 
             pending_message_ts = str(checkpoint.get("pending_message_ts") or "")
-            if slack_gateway is not None and job_type in {"answer_query", "look_deeper"}:
+            if slack_gateway is not None and job_type in {"answer_query", "look_deeper", "force_agent"}:
                 channel_id = str(checkpoint.get("channel_id") or "")
                 thread_ts = _thread_ts_for_checkpoint(checkpoint)
                 if channel_id and thread_ts and not pending_message_ts:
                     pending_response = await slack_gateway.post_thread_reply(
                         channel_id=channel_id,
                         thread_ts=thread_ts,
+                        text=build_pending_status_text(job_type=job_type),
+                        blocks=build_pending_status_blocks(job_type=job_type),
+                    )
+                    pending_message_ts = str(pending_response.get("ts") or "")
+                    checkpoint["pending_message_ts"] = pending_message_ts
+                    await _update_job_checkpoint(
+                        job_id,
+                        {
+                            "pending_message_ts": pending_message_ts,
+                            "delivery_status": "pending",
+                        },
+                    )
+                elif channel_id and job_type == "force_agent" and not pending_message_ts:
+                    pending_response = await slack_gateway.post_channel_message(
+                        channel_id=channel_id,
                         text=build_pending_status_text(job_type=job_type),
                         blocks=build_pending_status_blocks(job_type=job_type),
                     )
@@ -144,8 +159,23 @@ async def process_pending_query_jobs(slack_gateway: SlackGateway | None = None, 
                     "imported_chunk_count": ingestion_payload.get("imported_chunk_count"),
                     "imported_property_record_count": ingestion_payload.get("imported_property_record_count"),
                 }
-            elif job_type == "look_deeper":
-                deeper_payload = await run_toolhouse_deeper_review(str(checkpoint.get("query_id") or ""))
+            elif job_type in {"look_deeper", "force_agent"}:
+                if job_type == "force_agent":
+                    force_agent_reason_codes = checkpoint.get("force_agent_reason_codes")
+                    force_query_payload = await create_force_agent_query(
+                        str(checkpoint.get("query_text") or ""),
+                        slack_channel_id=str(checkpoint.get("channel_id") or "") or None,
+                        slack_user_id=str(checkpoint.get("user_id") or "") or None,
+                        slack_ts=str(checkpoint.get("query_ts") or "") or None,
+                        slack_thread_ts=_thread_ts_for_checkpoint(checkpoint) or None,
+                        reason_codes=[str(code) for code in force_agent_reason_codes] if isinstance(force_agent_reason_codes, list) else None,
+                    )
+                    query_id = str(force_query_payload.get("query_id") or "")
+                else:
+                    force_query_payload = None
+                    query_id = str(checkpoint.get("query_id") or "")
+
+                deeper_payload = await run_toolhouse_deeper_review(query_id)
                 delivery_payload = {"delivery_status": "prepared"}
                 if slack_gateway is not None:
                     channel_id = str(checkpoint.get("channel_id") or "")
@@ -158,13 +188,21 @@ async def process_pending_query_jobs(slack_gateway: SlackGateway | None = None, 
                             text=formatted_text,
                             blocks=build_deeper_review_blocks(deeper_payload),
                         )
-                    else:
+                    elif channel_id and thread_ts:
                         response = await slack_gateway.post_thread_reply(
                             channel_id=channel_id,
                             thread_ts=thread_ts,
                             text=formatted_text,
                             blocks=build_deeper_review_blocks(deeper_payload),
                         )
+                    elif channel_id and job_type == "force_agent":
+                        response = await slack_gateway.post_channel_message(
+                            channel_id=channel_id,
+                            text=formatted_text,
+                            blocks=build_deeper_review_blocks(deeper_payload),
+                        )
+                    else:
+                        response = {"ts": None}
                     delivery_payload = {
                         "delivery_status": "posted",
                         "delivery_ts": response.get("ts"),
@@ -180,6 +218,14 @@ async def process_pending_query_jobs(slack_gateway: SlackGateway | None = None, 
                     "toolhouse_run_id": deeper_payload.get("toolhouse_run_id"),
                     "toolhouse_fallback": deeper_payload.get("toolhouse_fallback", False),
                 }
+                if force_query_payload is not None:
+                    updates.update(
+                        {
+                            "force_agent": True,
+                            "force_agent_query_id": force_query_payload.get("query_id"),
+                            "force_agent_answer_snapshot_id": force_query_payload.get("answer_snapshot_id"),
+                        }
+                    )
             else:
                 answer_payload = await answer_query(
                     str(checkpoint.get("query_text") or ""),
@@ -225,7 +271,7 @@ async def process_pending_query_jobs(slack_gateway: SlackGateway | None = None, 
             await _complete_job(job_id, updates)
             processed.append({"job_id": str(job_id), "job_type": job_type, **updates})
         except Exception as exc:  # noqa: BLE001
-            if slack_gateway is not None and checkpoint and job_type in {"answer_query", "look_deeper"}:
+            if slack_gateway is not None and checkpoint and job_type in {"answer_query", "look_deeper", "force_agent"}:
                 channel_id = str(checkpoint.get("channel_id") or "")
                 thread_ts = _thread_ts_for_checkpoint(checkpoint)
                 pending_message_ts = str(checkpoint.get("pending_message_ts") or "")
@@ -241,6 +287,12 @@ async def process_pending_query_jobs(slack_gateway: SlackGateway | None = None, 
                         await slack_gateway.post_thread_reply(
                             channel_id=channel_id,
                             thread_ts=thread_ts,
+                            text=build_failed_status_text(job_type=job_type),
+                            blocks=build_failed_status_blocks(job_type=job_type),
+                        )
+                    elif channel_id and job_type == "force_agent":
+                        await slack_gateway.post_channel_message(
+                            channel_id=channel_id,
                             text=build_failed_status_text(job_type=job_type),
                             blocks=build_failed_status_blocks(job_type=job_type),
                         )

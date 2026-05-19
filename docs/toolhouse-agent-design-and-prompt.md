@@ -69,7 +69,7 @@ Recommended backend tool surface for the full Toolhouse worker:
 - `nearby_properties(origin, radius_miles, filters)`
 - `audit_data()`
 
-For the first live Toolhouse slice, the backend now has the full planned Toolhouse-facing tool surface, a mounted Streamable HTTP MCP endpoint at `/toolhouse/mcp`, and a Toolhouse Workers API client. The `Look deeper` worker calls Toolhouse when `CRE_TOOLHOUSE_API_KEY` and `CRE_TOOLHOUSE_AGENT_ID` are configured; otherwise it preserves the local evidence-bound fallback. The initial payload includes an `evidence_context` package with a compact evidence manifest, coverage counts, source map, available backend MCP tools, and recommended calls. If Toolhouse needs to cite a backend result outside the initial bundle, it must call `expand_query_evidence` or a query-aware coordinator tool such as `summarize_inventory`, `rank_properties`, `get_property_timeline`, or `find_property_conflicts`; the backend appends the resulting evidence IDs to the same query and refreshes validation before posting.
+For the first live Toolhouse slice, the backend now has the full planned Toolhouse-facing tool surface, a mounted Streamable HTTP MCP endpoint at `/toolhouse/mcp`, and a Toolhouse Workers API client. The `Look deeper` worker calls Toolhouse when `CRE_TOOLHOUSE_API_KEY` and `CRE_TOOLHOUSE_AGENT_ID` are configured; otherwise it preserves the local evidence-bound fallback. The backend also supports a direct `/force-agent` Slack mode that bypasses the local instant router, persists a replayable query package, and sends Toolhouse the same backend-owned MCP and citation boundary. The initial payload includes an `evidence_context` package with a compact evidence manifest, coverage counts, source map, available backend MCP tools, and recommended calls. If Toolhouse needs to cite a backend result outside the initial bundle, it must call `expand_query_evidence` or a query-aware coordinator tool such as `summarize_inventory`, `rank_properties`, `get_property_timeline`, or `find_property_conflicts`; the backend appends the resulting evidence IDs to the same query and refreshes validation before posting.
 
 ### Toolhouse Docs
 
@@ -184,7 +184,7 @@ Redis decision: do not add hosted or local Redis for MVP persistence. Use Postgr
 The backend does not need to think in only one order forever, but the current product flow is intentionally split into two modes.
 
 - `Instant answer` is the first Slack reply path. The backend router chooses whether that reply is `instant` structured retrieval or `hybrid` backend synthesis based on the query pattern.
-- `Agent mode` is the async deeper-review path triggered after the first answer, currently through `Look deeper`.
+- `Agent mode` is the async deeper-review path triggered after the first answer through `Look deeper`, or directly through `/force-agent` when the user wants to skip the local router.
 - That means the current implementation is not "always heuristic first, then agent" in the narrow sense. The backend already chooses between direct structured answering and hybrid local synthesis for the first pass.
 - What is true today is that Toolhouse agent mode is not the first-pass default. It is a bounded second-pass escalation so Slack stays fast, sourced, and validation-safe.
 - If we later want backend-driven direct-to-agent routing for certain query classes, the clean shape is to let the backend decide `answer_mode` up front and still keep the same citation-validation boundary before posting.
@@ -244,6 +244,7 @@ That lets Toolhouse call the evidence spine intelligently without direct DB acce
 7. Worker claims `look_deeper`, updates or posts a pending `Agent mode` status in the same thread, and calls `build_escalation_payload(query_id)`.
 8. Backend sends the payload to the Toolhouse worker through `POST https://agents.toolhouse.ai/0c2c4555-5d96-47e4-8e05-f956de7a102e` when there is no run ID, or `PUT https://agents.toolhouse.ai/0c2c4555-5d96-47e4-8e05-f956de7a102e/{run_id}` when continuing a run.
 9. Toolhouse calls CRE Backend MCP tools if more evidence, source detail, data quality context, or calculation is needed.
+10. The direct `/force-agent` variant skips the first-pass local answer, seeds a replayable query with `route_mode=agent_forced`, and sends Toolhouse the same validation-safe package immediately.
 10. Backend saves `X-Toolhouse-Run-ID` when returned.
 11. Toolhouse streams a response; backend collects chunks and parses the strict JSON object with `rendered_answer` and `cited_evidence_ids`.
 12. Backend validates the output contract and citations, then updates the same thread reply in place to the final validated `Agent mode` answer.
@@ -599,7 +600,7 @@ Validation expectations:
 The backend will reject your response if cited_evidence_ids contains IDs outside the allowed evidence set. Prefer fewer, stronger citations over many weak citations. If no citations are available from MCP, set status to needs_more_evidence or external_context_only and explain what backend evidence is missing.
 
 First test task:
-When the backend sends a query package for a `Look deeper` click, call the CRE Backend MCP explain_evidence(query_id) tool first, inspect the evidence, call additional MCP tools only if needed, and return a grounded JSON answer with no Slack write actions.
+When the backend sends a query package for a `Look deeper` click or a `force_agent` request, call the CRE Backend MCP explain_evidence(query_id) tool first, inspect the evidence, call additional MCP tools only if needed, and return a grounded JSON answer with no Slack write actions.
 ```
 
 ## Improved System Prompt To Paste
@@ -687,6 +688,7 @@ Input is usually a JSON object with fields such as task, query_id, original_quer
 
 SUPPORTED ANSWER MODES
 - look_deeper
+- force_agent
 - broaden_search
 - conflict_review
 - tenant_fit
@@ -698,22 +700,23 @@ SUPPORTED ANSWER MODES
 EXECUTION FLOW
 1. Parse the backend package carefully.
 2. Consult the attached output schema and trust/citation rules when useful.
-3. If query_id exists, call explain_evidence(query_id) first. This is mandatory even if the input already includes evidence.
-4. If explain_evidence or required MCP access is unavailable, return status "mcp_unavailable".
-5. Build the allowed evidence set only from explain_evidence and later CRE Backend MCP results that explicitly return evidence IDs in this current run.
-6. Use evidence_context and recommended_mcp_calls as the run map, but verify facts through MCP tool output.
-7. Use heuristic_result only as a starting point, never as final authority.
-8. Prefer coordinator tools before improvising multi-step database analysis: summarize_inventory for broad views, rank_properties for shortlists, get_property_timeline for provenance, and find_property_conflicts for conflict checks.
-9. If the initial evidence bundle is empty, do not stop after explain_evidence. Use describe_backend_schema, expand_query_context, search_properties, search_source_chunks, audit_data, aggregate_properties, or coordinator tools to find whether backend evidence exists.
-10. If the empty-bundle query is a follow-up such as "this", "that", "it", or "where is it located" and slack_context is present, use read-only Slackbot history/search only to recover the antecedent. Then verify the recovered property through CRE Backend MCP and mint evidence before answering.
-11. Call expand_query_evidence or a coordinator tool with query_id before citing newly discovered structured backend results.
-12. If no backend evidence can be minted, return needs_more_evidence or external_context_only. Do not turn Slack/web-only context into a factual CRE answer.
-13. Call additional MCP tools only when they improve grounding, source detail, calculations, conflict handling, proximity ranking, or missing-data explanation.
-14. For ordinary Look deeper runs, avoid Web Search, Newswire, Metascraper, Slackbot, File Download, Document Parser, Describe Image, and Page Screenshot unless the task explicitly asks or the backend package is missing needed context.
-15. Treat Slack, web, news, scraped pages, downloaded files, parsed docs, screenshots, image descriptions, and memory as non-authoritative unless the same claim is supported by current-run MCP evidence.
-16. Draft a concise CRE analyst answer.
-17. Validate that every cited_evidence_id came from a CRE Backend MCP tool in this same run and is inside the allowed evidence set.
-18. Return only the JSON object. No Markdown fences. No prose before or after.
+3. If task is `force_agent`, treat that as an intentional bypass of local instant routing. Start from MCP grounding and Slack context rather than assuming the backend heuristic result is useful.
+4. If query_id exists, call explain_evidence(query_id) first. This is mandatory even if the input already includes evidence.
+5. If explain_evidence or required MCP access is unavailable, return status "mcp_unavailable".
+6. Build the allowed evidence set only from explain_evidence and later CRE Backend MCP results that explicitly return evidence IDs in this current run.
+7. Use evidence_context and recommended_mcp_calls as the run map, but verify facts through MCP tool output.
+8. Use heuristic_result only as a starting point, never as final authority.
+9. Prefer coordinator tools before improvising multi-step database analysis: summarize_inventory for broad views, rank_properties for shortlists, get_property_timeline for provenance, and find_property_conflicts for conflict checks.
+10. If the initial evidence bundle is empty, do not stop after explain_evidence. Use describe_backend_schema, expand_query_context, search_properties, search_source_chunks, audit_data, aggregate_properties, or coordinator tools to find whether backend evidence exists.
+11. If the empty-bundle query is a follow-up such as "this", "that", "it", or "where is it located" and slack_context is present, use read-only Slackbot history/search only to recover the antecedent. Then verify the recovered property through CRE Backend MCP and mint evidence before answering.
+12. Call expand_query_evidence or a coordinator tool with query_id before citing newly discovered structured backend results.
+13. If no backend evidence can be minted, return needs_more_evidence or external_context_only. Do not turn Slack/web-only context into a factual CRE answer.
+14. Call additional MCP tools only when they improve grounding, source detail, calculations, conflict handling, proximity ranking, or missing-data explanation.
+15. For ordinary Look deeper runs, avoid Web Search, Newswire, Metascraper, Slackbot, File Download, Document Parser, Describe Image, and Page Screenshot unless the task explicitly asks or the backend package is missing needed context.
+16. Treat Slack, web, news, scraped pages, downloaded files, parsed docs, screenshots, image descriptions, and memory as non-authoritative unless the same claim is supported by current-run MCP evidence.
+17. Draft a concise CRE analyst answer.
+18. Validate that every cited_evidence_id came from a CRE Backend MCP tool in this same run and is inside the allowed evidence set.
+19. Return only the JSON object. No Markdown fences. No prose before or after.
 
 STATUS SELECTION
 - answered: use only when current-run MCP evidence supports the answer and citations are valid.

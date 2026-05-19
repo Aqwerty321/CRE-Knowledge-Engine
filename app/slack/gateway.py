@@ -32,6 +32,23 @@ class SlackGateway:
         )
         return dict(response.data)
 
+    async def post_channel_message(
+        self,
+        *,
+        channel_id: str,
+        text: str,
+        blocks: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        if self.client is None:
+            return {"ok": False, "delivery": "skipped", "ts": ""}
+
+        response = await self.client.chat_postMessage(
+            channel=channel_id,
+            text=text,
+            blocks=blocks,
+        )
+        return dict(response.data)
+
     async def post_ephemeral(
         self,
         *,
@@ -91,6 +108,24 @@ class RecordingSlackGateway(SlackGateway):
         payload = {
             "channel_id": channel_id,
             "thread_ts": thread_ts,
+            "text": text,
+            "blocks": blocks or [],
+            "ts": message_ts,
+        }
+        self.thread_replies.append(payload)
+        return {"ok": True, **payload}
+
+    async def post_channel_message(
+        self,
+        *,
+        channel_id: str,
+        text: str,
+        blocks: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        message_ts = f"channel-reply-{len(self.thread_replies) + 1}"
+        payload = {
+            "channel_id": channel_id,
+            "thread_ts": "",
             "text": text,
             "blocks": blocks or [],
             "ts": message_ts,

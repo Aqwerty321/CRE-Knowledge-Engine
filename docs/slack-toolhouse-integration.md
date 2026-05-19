@@ -69,7 +69,7 @@ Use Toolhouse for deeper agent behavior:
 
 This keeps the prototype Toolhouse-native without making the core data pipeline depend on agent reliability.
 
-Do not run both Slack Bolt and Toolhouse as competing Slack-facing agents in the MVP. Slack Bolt should own event intake and deterministic replies. Toolhouse should appear through `Look deeper` or a single deeper query path.
+Do not run both Slack Bolt and Toolhouse as competing Slack-facing agents in the MVP. Slack Bolt should own event intake and deterministic replies. Toolhouse should appear through `Look deeper` or a single deeper query path such as `/force-agent`.
 
 ## Slack App Configuration
 
@@ -93,9 +93,11 @@ Exact scopes depend on bot versus user-token choices, but the app will likely ne
 - `files:read`;
 - `chat:write`;
 - `users:read` for source display names;
-- `commands` only if slash commands are added.
+- `commands` for the `/force-agent` slash command.
 
 For a demo workspace, prefer one public channel to reduce permission friction.
+
+Message shortcuts do not require a separate OAuth scope, but they do require Interactivity to stay enabled and a message shortcut callback configured in Slack. The current backend callback ID is `force_agent_message_shortcut`.
 
 ## Historical Backfill Plan
 
@@ -158,7 +160,7 @@ File metadata and content should be separated:
 2. Backend receives the event and queues query handling.
 3. Router selects instant or hybrid mode.
 4. Backend posts a threaded answer with sources.
-5. The message includes buttons for `Show sources` and `Look deeper` when useful.
+5. The message includes buttons for `Show sources`, `Look deeper`, and `Force agent` when useful.
 
 ### Look Deeper
 
@@ -166,6 +168,14 @@ File metadata and content should be separated:
 2. Backend records the action and packages the original query, route decision, evidence bundle, and evidence-context manifest.
 3. Toolhouse worker receives the grounded context and may call backend tools for schema guidance, source detail, aggregation, chunk search, proximity, and controlled evidence expansion.
 4. Backend updates the existing thread with the expanded answer.
+
+### Force Agent
+
+1. User sends `/force-agent <question>`, mentions the bot with a `/force-agent` prefix, clicks `Force agent`, or uses the `force_agent_message_shortcut` message shortcut.
+2. Backend skips the local instant router, creates a replayable query package, and queues Toolhouse directly.
+3. Toolhouse starts from `explain_evidence(query_id)` plus Slack context, then broadens through backend MCP tools as needed.
+4. Backend still validates citations and posts the final answer in-channel or in-thread depending on the original Slack surface.
+5. For contextual thread replies such as pronoun-heavy follow-ups with low router confidence, the backend can auto-promote the reply into this same force-agent path without requiring a manual prefix.
 
 ### Show Sources
 
@@ -239,5 +249,5 @@ The agent should receive evidence IDs and source summaries, then return a synthe
 | File download fails | Mark source as failed and expose retry command. |
 | Parser fails | Keep source record, mark extraction status, and still index any recoverable text. |
 | Qdrant unavailable | Answer structured queries from PostgreSQL and label semantic search as unavailable internally. |
-| Toolhouse unavailable | Keep instant and hybrid answers working; hide or disable `Look deeper`. |
+| Toolhouse unavailable | Keep instant and hybrid answers working; hide or disable `Look deeper` and `/force-agent`. |
 | Rate limited | Pause the affected method/workspace and resume from checkpoint. |

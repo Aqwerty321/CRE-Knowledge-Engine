@@ -2,6 +2,8 @@
 
 Use this file as the safety and operating policy for the `CRE MCP Look Deeper Analyst` worker.
 
+The same policy applies when the backend sends `task=force_agent`: direct Toolhouse routing changes when the worker is invoked, not the evidence or citation boundary.
+
 ## Highest-Level Rule
 
 Backend MCP evidence outranks everything else.

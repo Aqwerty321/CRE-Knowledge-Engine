@@ -606,6 +606,13 @@ def _render_unsupported_answer() -> str:
     )
 
 
+def _render_force_agent_seed_answer() -> str:
+    return (
+        "*Force-agent request*\n"
+        "Skipping the instant router and sending this directly to Toolhouse with backend MCP citation checks."
+    )
+
+
 def _format_filter_summary(query_constructor: dict[str, object] | None) -> str:
     if not query_constructor:
         return "the requested filters"
@@ -1099,6 +1106,74 @@ async def answer_query(
                 "comparison_table": comparison_table,
                 "rendered_answer": rendered_answer,
                 "missing_data_explanation": no_results_context,
+            }
+
+
+async def create_force_agent_query(
+    query_text: str,
+    *,
+    slack_channel_id: str | None = None,
+    slack_user_id: str | None = None,
+    slack_ts: str | None = None,
+    slack_thread_ts: str | None = None,
+    reason_codes: list[str] | None = None,
+) -> dict[str, object]:
+    normalized_query = " ".join(str(query_text or "").split())
+    slack_context = _slack_context_payload(
+        slack_channel_id=slack_channel_id,
+        slack_user_id=slack_user_id,
+        slack_ts=slack_ts,
+        slack_thread_ts=slack_thread_ts,
+    )
+    normalized_reason_codes = ["force_agent", "instant_router_skipped"]
+    for code in reason_codes or []:
+        normalized_code = str(code or "").strip()
+        if normalized_code and normalized_code not in normalized_reason_codes:
+            normalized_reason_codes.append(normalized_code)
+
+    async with SessionFactory() as session:
+        async with session.begin():
+            query_record = Query(
+                slack_channel_id=slack_channel_id,
+                slack_user_id=slack_user_id,
+                slack_ts=slack_ts,
+                query_text=normalized_query,
+                route_mode="agent_forced",
+                route_confidence=Decimal("1.0000"),
+                reason_codes=normalized_reason_codes,
+            )
+            session.add(query_record)
+            await session.flush()
+
+            snapshot = AnswerSnapshot(
+                query_id=query_record.id,
+                rendered_answer=_render_force_agent_seed_answer(),
+                route_mode="agent_forced",
+                filters_json={"force_agent": True, "slack_context": slack_context},
+                evidence_ids=[],
+                dependency_state_json={
+                    "force_agent": True,
+                    "instant_router_skipped": True,
+                    "toolhouse_direct": True,
+                },
+                model_versions_json={"answering": "force-agent-v1"},
+            )
+            session.add(snapshot)
+            await session.flush()
+
+            return {
+                "status": "ready",
+                "answer_mode": "agent_mode",
+                "route_mode": "agent_forced",
+                "query_id": str(query_record.id),
+                "answer_snapshot_id": str(snapshot.id),
+                "reason_codes": list(query_record.reason_codes or []),
+                "filters": snapshot.filters_json,
+                "evidence_count": 0,
+                "matched_addresses": [],
+                "citations": [],
+                "comparison_table": None,
+                "rendered_answer": snapshot.rendered_answer,
             }
 
 

@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
@@ -12,7 +13,20 @@ from app.answering.query_service import explain_query
 from app.config import get_settings
 from app.db.session import SessionFactory
 from app.models import IngestionJob, SlackEvent
+from app.routing import build_query_plan
+from app.routing.query_constructor import build_structured_query_spec
 from app.slack.gateway import SlackGateway
+
+
+_AUTO_FORCE_AGENT_MIN_ROUTE_CONFIDENCE = Decimal("0.9000")
+_CONTEXTUAL_THREAD_FOLLOW_UP_PHRASES = (
+    "best use",
+    "best use case",
+    "where is this",
+    "where is it",
+    "where is this located",
+    "where is it located",
+)
 
 
 def _utcnow() -> datetime:
@@ -25,6 +39,67 @@ def _payload_hash(payload: dict[str, Any]) -> str:
 
 def _strip_bot_mention(text: str) -> str:
     return re.sub(r"^<@[^>]+>\s*", "", text).strip()
+
+
+def _parse_force_agent_text(text: str) -> tuple[bool, str]:
+    stripped = text.strip()
+    match = re.match(r"^(?:/(?:force-agent|force_agent)|force[-_\s]+agent)\b[:\s-]*", stripped, flags=re.IGNORECASE)
+    if match is None:
+        return False, stripped
+    return True, stripped[match.end() :].strip()
+
+
+def _normalized_free_text(text: str) -> str:
+    return " ".join(str(text or "").lower().replace("?", " ").split())
+
+
+def _looks_contextual_thread_follow_up(query_text: str) -> bool:
+    normalized = _normalized_free_text(query_text)
+    if any(phrase in normalized for phrase in _CONTEXTUAL_THREAD_FOLLOW_UP_PHRASES):
+        return True
+    return re.search(r"\b(this|that|it|these|those|them|here|there)\b", normalized) is not None
+
+
+def _has_explicit_address_anchor(query_text: str) -> bool:
+    normalized = _normalized_free_text(query_text)
+    structured_spec = build_structured_query_spec(query_text)
+    if structured_spec is not None and structured_spec.address_terms:
+        return True
+    return re.search(r"\b\d{2,5}\s+[a-z]", normalized) is not None
+
+
+def _auto_force_agent_reason(*, query_text: str, is_thread_reply: bool) -> str | None:
+    if not is_thread_reply:
+        return None
+    if not _looks_contextual_thread_follow_up(query_text):
+        return None
+    if _has_explicit_address_anchor(query_text):
+        return None
+
+    plan = build_query_plan(query_text)
+    if plan.route_mode == "failed":
+        return "auto_thread_follow_up"
+    if plan.route_confidence < _AUTO_FORCE_AGENT_MIN_ROUTE_CONFIDENCE:
+        return "auto_thread_follow_up"
+    return None
+
+
+def _extract_query_id_from_slack_message(message_payload: dict[str, Any]) -> str | None:
+    blocks = message_payload.get("blocks") or []
+    if not isinstance(blocks, list):
+        return None
+
+    for block in blocks:
+        if not isinstance(block, dict) or block.get("type") != "actions":
+            continue
+        for element in block.get("elements") or []:
+            if not isinstance(element, dict):
+                continue
+            if element.get("action_id") in {"show_sources", "look_deeper", "force_agent_query"}:
+                value = str(element.get("value") or "").strip()
+                if value:
+                    return value
+    return None
 
 
 def _event_retry_meta(headers: dict[str, str]) -> tuple[int | None, str | None]:
@@ -302,21 +377,34 @@ async def enqueue_app_mention_event(payload: dict[str, Any], headers: dict[str, 
                 return {"status": "ignored", "event_id": event_id, "channel_id": channel_id}
 
             query_text = _strip_bot_mention(str(event.get("text") or ""))
+            force_agent, routed_query_text = _parse_force_agent_text(query_text)
+            auto_force_agent_reason = None if force_agent else _auto_force_agent_reason(
+                query_text=routed_query_text,
+                is_thread_reply=bool(event.get("thread_ts")),
+            )
+            if auto_force_agent_reason is not None:
+                force_agent = True
             thread_ts = str(event.get("thread_ts") or event.get("ts") or "")
+            checkpoint_json = {
+                "slack_event_id": event_id,
+                "team_id": team_id,
+                "channel_id": channel_id,
+                "user_id": str(event.get("user") or ""),
+                "thread_ts": thread_ts,
+                "query_ts": str(event.get("ts") or ""),
+                "query_text": routed_query_text,
+                "original_query_text": query_text,
+                "force_agent": force_agent,
+                "event_type": str(event.get("type") or ""),
+            }
+            if auto_force_agent_reason is not None:
+                checkpoint_json["force_agent_source"] = auto_force_agent_reason
+                checkpoint_json["force_agent_reason_codes"] = [auto_force_agent_reason]
             job = IngestionJob(
-                job_type="answer_query",
+                job_type="force_agent" if force_agent else "answer_query",
                 status="queued",
                 attempt_count=0,
-                checkpoint_json={
-                    "slack_event_id": event_id,
-                    "team_id": team_id,
-                    "channel_id": channel_id,
-                    "user_id": str(event.get("user") or ""),
-                    "thread_ts": thread_ts,
-                    "query_ts": str(event.get("ts") or ""),
-                    "query_text": query_text,
-                    "event_type": str(event.get("type") or ""),
-                },
+                checkpoint_json=checkpoint_json,
             )
             session.add(job)
             await session.flush()
@@ -328,7 +416,81 @@ async def enqueue_app_mention_event(payload: dict[str, Any], headers: dict[str, 
                 "event_id": event_id,
                 "job_id": str(job.id),
                 "channel_id": channel_id,
+                "job_type": job.job_type,
             }
+
+
+async def enqueue_force_agent_request(
+    *,
+    query_text: str,
+    channel_id: str,
+    user_id: str,
+    team_id: str | None = None,
+    thread_ts: str | None = None,
+    query_ts: str | None = None,
+    source: str = "force_agent_command",
+) -> dict[str, Any]:
+    normalized_query = " ".join(str(query_text or "").split())
+    async with SessionFactory() as session:
+        async with session.begin():
+            job = IngestionJob(
+                job_type="force_agent",
+                status="queued",
+                attempt_count=0,
+                checkpoint_json={
+                    "team_id": team_id or "",
+                    "channel_id": channel_id,
+                    "user_id": user_id,
+                    "thread_ts": thread_ts or "",
+                    "query_ts": query_ts or "",
+                    "query_text": normalized_query,
+                    "original_query_text": normalized_query,
+                    "force_agent": True,
+                    "event_type": source,
+                },
+            )
+            session.add(job)
+            await session.flush()
+            return {"status": "queued", "job_id": str(job.id), "job_type": "force_agent"}
+
+
+async def handle_force_agent_command(
+    *,
+    query_text: str,
+    channel_id: str,
+    user_id: str,
+    team_id: str | None,
+    thread_ts: str | None,
+    query_ts: str | None = None,
+    source: str = "slash_command",
+    slack_gateway: SlackGateway,
+) -> dict[str, Any]:
+    normalized_query = " ".join(str(query_text or "").split())
+    if not normalized_query:
+        await slack_gateway.post_ephemeral(
+            channel_id=channel_id,
+            user_id=user_id,
+            thread_ts=thread_ts or None,
+            text="Use `/force-agent <question>` to send a question straight to Toolhouse.",
+        )
+        return {"status": "missing_query", "job_type": "force_agent"}
+
+    payload = await enqueue_force_agent_request(
+        query_text=normalized_query,
+        channel_id=channel_id,
+        user_id=user_id,
+        team_id=team_id,
+        thread_ts=thread_ts,
+        query_ts=query_ts,
+        source=source,
+    )
+    await slack_gateway.post_ephemeral(
+        channel_id=channel_id,
+        user_id=user_id,
+        thread_ts=thread_ts or None,
+        text="On it. Force-agent mode is going straight to Toolhouse with backend MCP checks.",
+    )
+    return payload
 
 
 def build_slack_reply_text(payload: dict[str, Any]) -> str:
@@ -386,6 +548,15 @@ def build_answer_blocks(answer_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "value": str(query_id),
             }
         )
+    if query_id:
+        action_elements.append(
+            {
+                "type": "button",
+                "action_id": "force_agent_query",
+                "text": {"type": "plain_text", "text": "Force agent"},
+                "value": str(query_id),
+            }
+        )
     if action_elements:
         blocks.append(
             {
@@ -422,6 +593,8 @@ def build_deeper_review_blocks(deeper_payload: dict[str, Any]) -> list[dict[str,
 
 
 def build_pending_status_text(*, job_type: str) -> str:
+    if job_type == "force_agent":
+        return "_Mode: Agent mode - force-agent direct Toolhouse pass_\n\n_Skipping the instant router and checking backend MCP context._"
     if job_type == "look_deeper":
         return "_Mode: Agent mode - checking backend context_\n\n_Review in progress inside this thread._"
     return "_Mode: Instant answer - searching visible evidence_\n\n_Gathering the best visible evidence for this thread._"
@@ -437,6 +610,8 @@ def build_pending_status_blocks(*, job_type: str) -> list[dict[str, Any]]:
 
 
 def build_failed_status_text(*, job_type: str) -> str:
+    if job_type == "force_agent":
+        return "_Mode: Agent mode - force-agent review failed_\n\nI could not finish the direct Toolhouse review cleanly. Please retry `/force-agent <question>`."
     if job_type == "look_deeper":
         return "_Mode: Agent mode - review failed_\n\nI could not finish the deeper review cleanly. Please retry *Look deeper*."
     return "_Mode: Instant answer - processing failed_\n\nI could not finish the instant answer cleanly. Please retry the question."
@@ -538,6 +713,79 @@ async def handle_look_deeper_action(
     return {"status": "queued", "job_id": job_id, "query_id": query_id}
 
 
+async def handle_force_agent_action(
+    *,
+    query_id: str,
+    channel_id: str,
+    user_id: str,
+    thread_ts: str,
+    slack_gateway: SlackGateway,
+) -> dict[str, Any]:
+    explain_payload = await explain_query(query_id)
+    query_text = " ".join(str(explain_payload.get("query_text") or "").split())
+    slack_context = dict(explain_payload.get("slack_context") or {})
+    effective_thread_ts = thread_ts or str(slack_context.get("thread_ts") or slack_context.get("message_ts") or "")
+    query_ts = str(slack_context.get("message_ts") or "") or None
+
+    if not query_text:
+        await slack_gateway.post_ephemeral(
+            channel_id=channel_id,
+            user_id=user_id,
+            thread_ts=effective_thread_ts or None,
+            text="I could not reopen that query cleanly. Please retry `/force-agent <question>`.",
+        )
+        return {"status": "missing_query", "job_type": "force_agent", "query_id": query_id}
+
+    payload = await enqueue_force_agent_request(
+        query_text=query_text,
+        channel_id=channel_id,
+        user_id=user_id,
+        thread_ts=effective_thread_ts or None,
+        query_ts=query_ts,
+        source="force_agent_action",
+    )
+    await slack_gateway.post_ephemeral(
+        channel_id=channel_id,
+        user_id=user_id,
+        thread_ts=effective_thread_ts or None,
+        text="On it. Force-agent mode is going straight to Toolhouse with backend MCP checks.",
+    )
+    return payload
+
+
+async def handle_force_agent_message_shortcut(
+    *,
+    message_payload: dict[str, Any],
+    channel_id: str,
+    user_id: str,
+    team_id: str | None,
+    slack_gateway: SlackGateway,
+) -> dict[str, Any]:
+    shortcut_query_id = _extract_query_id_from_slack_message(message_payload)
+    thread_ts = str(message_payload.get("thread_ts") or message_payload.get("ts") or "")
+    if shortcut_query_id:
+        return await handle_force_agent_action(
+            query_id=shortcut_query_id,
+            channel_id=channel_id,
+            user_id=user_id,
+            thread_ts=thread_ts,
+            slack_gateway=slack_gateway,
+        )
+
+    shortcut_text = _strip_bot_mention(str(message_payload.get("text") or ""))
+    force_agent, routed_query_text = _parse_force_agent_text(shortcut_text)
+    return await handle_force_agent_command(
+        query_text=routed_query_text if force_agent else shortcut_text,
+        channel_id=channel_id,
+        user_id=user_id,
+        team_id=team_id,
+        thread_ts=thread_ts or None,
+        query_ts=str(message_payload.get("ts") or "") or None,
+        source="message_shortcut",
+        slack_gateway=slack_gateway,
+    )
+
+
 __all__ = [
     "build_deeper_review_blocks",
     "build_answer_blocks",
@@ -548,6 +796,10 @@ __all__ = [
     "build_slack_reply_text",
     "build_show_sources_text",
     "enqueue_app_mention_event",
+    "enqueue_force_agent_request",
+    "handle_force_agent_action",
+    "handle_force_agent_command",
+    "handle_force_agent_message_shortcut",
     "handle_look_deeper_action",
     "handle_show_sources_action",
 ]

@@ -94,9 +94,11 @@ def parse_toolhouse_response_payload(raw_response: str) -> tuple[dict[str, Any] 
 
 
 def build_toolhouse_message(escalation_payload: dict[str, Any]) -> str:
+    reason_codes = {str(value) for value in escalation_payload.get("reason_codes") or []}
+    task = "force_agent" if "force_agent" in reason_codes else "look_deeper"
     message_payload = {
         **escalation_payload,
-        "task": "look_deeper",
+        "task": task,
         "instructions": (
             "Use CRE Backend MCP first. Return only the strict JSON object required by the "
             "CRE MCP Look Deeper Analyst output contract. For answered responses, cite at least one "
@@ -104,6 +106,8 @@ def build_toolhouse_message(escalation_payload: dict[str, Any]) -> str:
             "and recommended MCP calls. Use describe_backend_schema, expand_query_context, summarize_inventory, "
             "rank_properties, get_property_timeline, find_property_conflicts, search_properties, aggregate_properties, "
             "search_source_chunks, get_source_detail, nearby_properties, and audit_data as needed. "
+            "If task is force_agent, the user intentionally bypassed instant routing; recover thread context when needed, "
+            "then ground the answer through CRE Backend MCP before writing. "
             "If the initial evidence bundle is empty, do not stop after explain_evidence: use backend MCP search, "
             "schema, audit, aggregate, or coordinator tools to find citable backend evidence. If slack_context is present "
             "and the user asked a follow-up such as 'this', 'that', or 'where is it located', read Slack history only for "

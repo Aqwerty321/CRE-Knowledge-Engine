@@ -155,6 +155,8 @@ Usage rule: follow `recommended_mcp_calls` unless the user question clearly need
 
 Empty-bundle rule: when `bundle_shape.evidence_count` is 0, `Look deeper` is still allowed. Use the recommended MCP calls to broaden safely: inspect schema/context, search properties and source chunks, use coordinator tools when they fit, and call `expand_query_evidence` before citing any newly discovered backend result. If Slack context is present for a follow-up question, read Slack history only to identify the antecedent, then verify and cite through CRE Backend MCP.
 
+Force-agent rule: when `task` is `force_agent`, the backend intentionally skipped local instant routing. Do not anchor on a missing or weak heuristic result. Start from `explain_evidence`, Slack context, and backend MCP broadening calls.
+
 ## Tool Contracts
 
 ### `explain_evidence`
