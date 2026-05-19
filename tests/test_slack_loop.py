@@ -210,6 +210,17 @@ def _app_mention_payload(channel_id: str = "C_CRE_LISTINGS_DEMO") -> dict[str, o
     }
 
 
+def _unsupported_app_mention_payload(channel_id: str = "C_CRE_LISTINGS_DEMO") -> dict[str, object]:
+    payload = _app_mention_payload(channel_id)
+    payload["event_id"] = "Ev_test_app_mention_unsupported_1"
+    event = dict(payload["event"])
+    event["text"] = "<@U_BOT> where is this located"
+    event["ts"] = "1715860000.000200"
+    event["thread_ts"] = "1715860000.000100"
+    payload["event"] = event
+    return payload
+
+
 class FakeSlackHistoryClient:
     async def auth_test(self) -> dict[str, str]:
         return {"team_id": "T_CRE_DEMO"}
@@ -563,6 +574,34 @@ def test_query_worker_posts_threaded_answer_with_show_sources_button(
     assert latest_query.slack_channel_id == "C_CRE_LISTINGS_DEMO"
     assert latest_query.slack_user_id == "U_REQUESTOR"
     assert latest_query.slack_ts == "1715860000.000100"
+
+
+@pytest.mark.golden
+def test_zero_evidence_slack_answer_offers_look_deeper_only(
+    prepared_slack_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = _unsupported_app_mention_payload()
+    body = json.dumps(payload)
+    headers = {"content-type": "application/json", **_signed_headers("test-signing-secret", body)}
+
+    response = async_runner.run(_post_request("/slack/events", content=body, headers=headers))
+    assert response.status_code == 200
+
+    gateway = RecordingSlackGateway()
+    processed = async_runner.run(process_pending_query_jobs(slack_gateway=gateway, limit=1))
+
+    assert processed[0]["answer_status"] == "unsupported"
+    posted_reply = gateway.thread_replies[0]
+    actions_block = _find_actions_block(posted_reply["blocks"])
+    assert [element["action_id"] for element in actions_block["elements"]] == ["look_deeper"]
+    assert "Use *Look deeper*" in posted_reply["text"]
+
+    query_id = actions_block["elements"][0]["value"]
+    explain_payload = async_runner.run(explain_query(query_id))
+    assert explain_payload["evidence_count"] == 0
+    assert explain_payload["slack_context"]["message_ts"] == "1715860000.000200"
+    assert explain_payload["slack_context"]["thread_ts"] == "1715860000.000100"
 
 
 @pytest.mark.golden

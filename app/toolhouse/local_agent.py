@@ -291,6 +291,7 @@ async def build_escalation_payload(query_id: str) -> dict[str, Any]:
         "evidence": explain_payload.get("evidence", []),
         "evidence_context": evidence_context,
         "backend_mcp_tools": evidence_context["available_backend_mcp_tools"],
+        "slack_context": explain_payload.get("slack_context", {}),
         "decision_summary": explain_payload.get("decision_summary"),
         "explain_payload": explain_payload,
     }

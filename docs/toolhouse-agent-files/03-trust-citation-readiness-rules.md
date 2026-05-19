@@ -39,6 +39,8 @@ Toolhouse owns:
 5. If no valid MCP evidence is available, return `needs_more_evidence`, `mcp_unavailable`, `tool_error`, or `external_context_only`.
 6. The backend will reject unsupported citations before posting to Slack.
 
+For zero-evidence escalations, the worker may use read-only Slack history/search only to recover conversational context, such as what "this" or "it" refers to. Slack context is not citable by itself. Before answering a CRE fact, recover the likely property/source through CRE Backend MCP and mint or reuse backend evidence IDs for the current query.
+
 ## Hard No-Fabrication Rules
 
 Never invent:

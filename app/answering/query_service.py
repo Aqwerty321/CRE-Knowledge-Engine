@@ -252,6 +252,7 @@ def _snapshot_filters_for_plan(
     *,
     no_results_context: dict[str, object] | None = None,
     data_quality_report: dict[str, object] | None = None,
+    slack_context: dict[str, object] | None = None,
 ) -> dict[str, object]:
     filters = dict(plan.filters)
     constructor_filters = _query_constructor_filters_for_plan(plan)
@@ -261,7 +262,25 @@ def _snapshot_filters_for_plan(
         filters["missing_data_explanation"] = no_results_context
     if data_quality_report is not None:
         filters["data_quality_report"] = data_quality_report
+    if slack_context:
+        filters["slack_context"] = slack_context
     return filters
+
+
+def _slack_context_payload(
+    *,
+    slack_channel_id: str | None,
+    slack_user_id: str | None,
+    slack_ts: str | None,
+    slack_thread_ts: str | None,
+) -> dict[str, object]:
+    payload = {
+        "channel_id": slack_channel_id,
+        "user_id": slack_user_id,
+        "message_ts": slack_ts,
+        "thread_ts": slack_thread_ts or slack_ts,
+    }
+    return {key: value for key, value in payload.items() if value}
 
 
 async def _fetch_property_rows(
@@ -579,7 +598,12 @@ async def _retrieve_evidence(session: AsyncSession, plan: QueryPlan) -> list[Ret
 
 def _render_unsupported_answer() -> str:
     supported = "; ".join(SUPPORTED_QUERY_HINTS)
-    return f"*Unsupported query for the current instant slice*\nSupported patterns: {supported}."
+    return (
+        "*Unsupported query for the current instant slice*\n"
+        "I could not match that to a safe local route or sourced result. Use *Look deeper* if you want "
+        "Toolhouse to try a broader backend MCP pass or explain what evidence is missing.\n"
+        f"Supported patterns: {supported}."
+    )
 
 
 def _format_filter_summary(query_constructor: dict[str, object] | None) -> str:
@@ -937,8 +961,15 @@ async def answer_query(
     slack_channel_id: str | None = None,
     slack_user_id: str | None = None,
     slack_ts: str | None = None,
+    slack_thread_ts: str | None = None,
 ) -> dict[str, object]:
     plan = build_query_plan(query_text)
+    slack_context = _slack_context_payload(
+        slack_channel_id=slack_channel_id,
+        slack_user_id=slack_user_id,
+        slack_ts=slack_ts,
+        slack_thread_ts=slack_thread_ts,
+    )
 
     async with SessionFactory() as session:
         async with session.begin():
@@ -959,7 +990,7 @@ async def answer_query(
                     query_id=query_record.id,
                     rendered_answer=_render_unsupported_answer(),
                     route_mode=plan.route_mode,
-                    filters_json=_snapshot_filters_for_plan(plan),
+                    filters_json=_snapshot_filters_for_plan(plan, slack_context=slack_context),
                     evidence_ids=[],
                     dependency_state_json=_dependency_state_for_plan(plan),
                     model_versions_json=_model_versions_for_plan(plan),
@@ -988,7 +1019,11 @@ async def answer_query(
                     query_id=query_record.id,
                     rendered_answer=rendered_answer,
                     route_mode=plan.route_mode,
-                    filters_json=_snapshot_filters_for_plan(plan, data_quality_report=data_quality_report),
+                    filters_json=_snapshot_filters_for_plan(
+                        plan,
+                        data_quality_report=data_quality_report,
+                        slack_context=slack_context,
+                    ),
                     evidence_ids=[],
                     dependency_state_json=_dependency_state_for_plan(plan),
                     model_versions_json=_model_versions_for_plan(plan),
@@ -1038,7 +1073,11 @@ async def answer_query(
                 query_id=query_record.id,
                 rendered_answer=rendered_answer,
                 route_mode=plan.route_mode,
-                filters_json=_snapshot_filters_for_plan(plan, no_results_context=no_results_context),
+                filters_json=_snapshot_filters_for_plan(
+                    plan,
+                    no_results_context=no_results_context,
+                    slack_context=slack_context,
+                ),
                 evidence_ids=[record.id for record in evidence_records],
                 dependency_state_json=_dependency_state_for_result(plan, items),
                 model_versions_json=_model_versions_for_plan(plan),
@@ -1128,6 +1167,14 @@ async def explain_query(query_id: str) -> dict[str, object]:
         dependency_state = snapshot.dependency_state_json if snapshot is not None else {}
         model_versions = snapshot.model_versions_json if snapshot is not None else {}
         plan = build_query_plan(query_record.query_text)
+        slack_context = dict(filters.get("slack_context") or {}) if isinstance(filters.get("slack_context"), dict) else {}
+        if query_record.slack_channel_id:
+            slack_context.setdefault("channel_id", query_record.slack_channel_id)
+        if query_record.slack_user_id:
+            slack_context.setdefault("user_id", query_record.slack_user_id)
+        if query_record.slack_ts:
+            slack_context.setdefault("message_ts", query_record.slack_ts)
+            slack_context.setdefault("thread_ts", query_record.slack_ts)
 
         decision_summary: dict[str, object] | None = None
         if plan.query_type == "loading_access_search" and evidence_bundle:
@@ -1250,4 +1297,5 @@ async def explain_query(query_id: str) -> dict[str, object]:
             "decision_summary": decision_summary,
             "missing_data_explanation": filters.get("missing_data_explanation"),
             "data_quality_report": filters.get("data_quality_report"),
+            "slack_context": slack_context,
         }

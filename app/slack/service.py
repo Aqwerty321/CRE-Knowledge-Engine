@@ -364,24 +364,33 @@ def build_answer_blocks(answer_payload: dict[str, Any]) -> list[dict[str, Any]]:
     if table_block is not None:
         blocks.append(table_block)
     blocks.append(build_trust_receipt_block(answer_payload))
-    if int(answer_payload.get("evidence_count", 0)) > 0:
+
+    action_elements: list[dict[str, Any]] = []
+    query_id = answer_payload.get("query_id")
+    evidence_count = int(answer_payload.get("evidence_count", 0))
+    if query_id and evidence_count > 0:
+        action_elements.append(
+            {
+                "type": "button",
+                "action_id": "show_sources",
+                "text": {"type": "plain_text", "text": "Show sources"},
+                "value": str(query_id),
+            }
+        )
+    if query_id and (evidence_count > 0 or answer_payload.get("status") in {"unsupported", "no_results"}):
+        action_elements.append(
+            {
+                "type": "button",
+                "action_id": "look_deeper",
+                "text": {"type": "plain_text", "text": "Look deeper"},
+                "value": str(query_id),
+            }
+        )
+    if action_elements:
         blocks.append(
             {
                 "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "action_id": "show_sources",
-                        "text": {"type": "plain_text", "text": "Show sources"},
-                        "value": str(answer_payload["query_id"]),
-                    },
-                    {
-                        "type": "button",
-                        "action_id": "look_deeper",
-                        "text": {"type": "plain_text", "text": "Look deeper"},
-                        "value": str(answer_payload["query_id"]),
-                    }
-                ],
+                "elements": action_elements,
             }
         )
     return blocks
@@ -393,25 +402,28 @@ def build_deeper_review_blocks(deeper_payload: dict[str, Any]) -> list[dict[str,
     if table_block is not None:
         blocks.append(table_block)
     blocks.append(build_trust_receipt_block(deeper_payload))
-    blocks.append(
-        {
-            "type": "actions",
-            "elements": [
-                {
-                    "type": "button",
-                    "action_id": "show_sources",
-                    "text": {"type": "plain_text", "text": "Show sources"},
-                    "value": str(deeper_payload["query_id"]),
-                }
-            ],
-        }
-    )
+    allowed_ids = list(((deeper_payload.get("escalation_payload") or {}).get("allowed_evidence_ids") or []))
+    cited_ids = list(deeper_payload.get("cited_evidence_ids") or [])
+    if deeper_payload.get("query_id") and (allowed_ids or cited_ids):
+        blocks.append(
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "action_id": "show_sources",
+                        "text": {"type": "plain_text", "text": "Show sources"},
+                        "value": str(deeper_payload["query_id"]),
+                    }
+                ],
+            }
+        )
     return blocks
 
 
 def build_pending_status_text(*, job_type: str) -> str:
     if job_type == "look_deeper":
-        return "_Mode: Agent mode - reviewing the current evidence bundle_\n\n_Review in progress inside this thread._"
+        return "_Mode: Agent mode - checking backend context_\n\n_Review in progress inside this thread._"
     return "_Mode: Instant answer - searching visible evidence_\n\n_Gathering the best visible evidence for this thread._"
 
 

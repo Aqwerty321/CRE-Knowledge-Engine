@@ -11,14 +11,14 @@ The point is not to make Slack feel like a chatbot. The point is to help a broke
 - It keeps the useful receipt for each fact: square footage, rent, availability, market, source row or page, Slack sender, channel, and timestamp.
 - It uses Postgres for exact facts: filters, proximity, aggregation, source lookup, and conflict handling.
 - It uses BM25S, PolyFuzz, TF-IDF character n-grams, optional Qdrant, and reranking when the question depends on source text, such as loading access or yard space.
-- It gives the user two Slack actions: `Show sources` for the supporting rows/pages/messages, and `Look deeper` for a Toolhouse review.
+- It gives the user Slack actions: `Show sources` for supporting rows/pages/messages, and `Look deeper` for Toolhouse review or a zero-evidence recovery pass.
 - It lets Toolhouse coordinate through a narrow MCP surface for schema, context, search, aggregation, inventory summaries, rankings, timelines, conflicts, and query-scoped evidence expansion.
 - It validates Toolhouse citations against backend evidence IDs before posting a deeper answer.
 - It can replay answers, run golden evals, execute readiness checks, and generate a submission report.
 
 Current verification:
 
-- `uv run pytest -q` passes 101 tests with no known failures or warning noise.
+- `uv run pytest -q` passes 102 tests with no known failures or warning noise.
 - `uv run cre-cli demo-doctor --live-toolhouse` returns `ready`, including public callback health and live Toolhouse validation with no local fallback.
 - `uv run cre-cli demo-dry-run --live-toolhouse` passes the recording query sequence and returns replay commands for each answer.
 - Two live Slack-visible Toolhouse runs used the new MCP coordinator tools (`summarize_inventory`, `rank_properties`, and `find_property_conflicts`) with backend validation and no fallback.
@@ -245,7 +245,7 @@ flowchart LR
 
     subgraph S["Slack action<br/>user asks for second pass"]
         direction TB
-        S3["Look deeper button<br/>same thread, same evidence"]
+        S3["Look deeper button<br/>same thread,<br/>same or empty bundle"]
     end
 
     subgraph J["Deeper-review job<br/>queued and replayable"]
@@ -331,7 +331,7 @@ flowchart LR
         O3["Dry run and report<br/>recording prompts, replay IDs,<br/>talking points"]
         O4["Secret scan<br/>source, docs, config,<br/>sample files"]
         O5["Graphify map<br/>767 nodes, 1345 edges,<br/>56 communities"]
-        O6["Expanded test battery<br/>101 tests, sample corpus,<br/>hybrid, Slack, MCP"]
+        O6["Expanded test battery<br/>102 tests, sample corpus,<br/>hybrid, Slack, MCP"]
         O7["Live Toolhouse proof<br/>Slack-visible runs used<br/>new coordinator tools"]
     end
 
@@ -690,7 +690,7 @@ flowchart LR
     A --> B["Slack answer blocks<br/>source receipt, table,<br/>actions"]
     B --> D["Show sources<br/>ephemeral evidence view"]
     B --> L["Look deeper<br/>queue agent review"]
-    L --> T["Toolhouse agent mode<br/>allowed evidence bundle<br/>and citation validation"]
+    L --> T["Toolhouse agent mode<br/>allowed evidence or<br/>safe broadening path"]
 
     class Q question
     class P,C,S router
@@ -714,7 +714,7 @@ The router is small by design. For each question it writes down the route, query
 | Generic structured search | `instant` | Builds a transparent query constructor with conditions, sort, and limit, then returns deduped structured matches. |
 | Tenant fit | `hybrid` | Runs a local heuristic over price, size, availability, source quality, and logistics terms, then invites `Look deeper` for Toolhouse review. |
 | Data quality | `instant` | Scans indexed sources and property rows for missing fields, sources without chunks/properties, and duplicate groups with conflicting numeric facts. |
-| Unsupported | `failed` | Refuses to guess and returns the supported query patterns currently covered. |
+| Unsupported | `failed` | Refuses to guess, returns the supported query patterns, and still offers `Look deeper` so Toolhouse can broaden through MCP or report missing evidence. |
 
 One important detail: `hybrid` does not mean the agent is improvising. It still means backend retrieval. The answer service finds the evidence, writes the evidence rows, records dependency state, and only then posts to Slack.
 
@@ -760,9 +760,9 @@ There are two names here, and they do different jobs. `instant_answer` is the de
 
 The normal flow is predictable: route the question, retrieve evidence, render the answer, save the evidence, save the snapshot, and post the Slack reply with actions.
 
-Agent mode starts only when the user clicks `Look deeper` or an operator runs the deeper-review path. The payload comes from `explain-query`: local answer, route details, filters, allowed evidence IDs, evidence bundle, field details, decision summary, and an `evidence_context` map with coverage counts, source manifests, available MCP tools, and recommended calls.
+Agent mode starts only when the user clicks `Look deeper` or an operator runs the deeper-review path. The payload comes from `explain-query`: local answer, route details, filters, allowed evidence IDs, evidence bundle, field details, decision summary, Slack context when available, and an `evidence_context` map with coverage counts, source manifests, available MCP tools, and recommended calls.
 
-Toolhouse can use that map to call the CRE Backend MCP for a smarter second pass. The useful new bit is the coordinator layer: `summarize_inventory`, `rank_properties`, `get_property_timeline`, and `find_property_conflicts`. Those tools let Toolhouse inspect the database like an analyst without raw SQL or destructive access. If a new backend result needs to become citable, Toolhouse calls `expand_query_evidence` or a query-aware coordinator tool; the backend mints the evidence ID, refreshes the allowed set, and rejects anything unsupported before Slack sees it.
+Toolhouse can use that map to call the CRE Backend MCP for a smarter second pass. The useful new bit is the coordinator layer: `summarize_inventory`, `rank_properties`, `get_property_timeline`, and `find_property_conflicts`. Those tools let Toolhouse inspect the database like an analyst without raw SQL or destructive access. If the starting bundle is empty, Toolhouse can try backend search/coordinator tools and, for follow-up wording, read Slack history only to recover the antecedent. Any factual CRE answer still has to mint or reuse backend evidence IDs first; otherwise it returns `needs_more_evidence` or `external_context_only`.
 
 So the modes stay separate:
 
@@ -795,7 +795,7 @@ A broker can ask:
 | `Find whse opts with trk court and trlr parking.` | Hybrid retrieval over noisy operational language, with BM25S, PolyFuzz, TF-IDF, and optional Qdrant/rerank support. |
 | `Which options look best for a logistics tenant under $35/SF available soon?` | Local tenant-fit synthesis first; Toolhouse can then call backend ranking and conflict tools for the deeper read. |
 | `Why did you use 62k sq ft for Harbor Rd?` | Freshness and authority conflict handling with selected, supporting, and superseded evidence. |
-| `Look deeper` | Toolhouse review over the allowed evidence bundle, with MCP coordinator tools and backend citation validation. |
+| `Look deeper` | Toolhouse review over the allowed evidence bundle, or a zero-evidence MCP broadening pass with backend citation validation. |
 
 Every factual answer includes a small source receipt: which route was used, how many evidence items were checked, and why those sources were selected. `Show sources` opens the rows, pages, files, and Slack messages behind the answer. `replay-query` rebuilds the stored answer outside Slack.
 

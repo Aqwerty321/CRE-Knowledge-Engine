@@ -186,6 +186,7 @@ async def process_pending_query_jobs(slack_gateway: SlackGateway | None = None, 
                     slack_channel_id=str(checkpoint.get("channel_id") or "") or None,
                     slack_user_id=str(checkpoint.get("user_id") or "") or None,
                     slack_ts=str(checkpoint.get("query_ts") or "") or None,
+                    slack_thread_ts=_thread_ts_for_checkpoint(checkpoint) or None,
                 )
 
                 delivery_payload = {"delivery_status": "prepared"}
@@ -216,6 +217,7 @@ async def process_pending_query_jobs(slack_gateway: SlackGateway | None = None, 
                     **delivery_payload,
                     "query_id": answer_payload["query_id"],
                     "answer_mode": answer_payload.get("answer_mode"),
+                    "answer_status": answer_payload.get("status"),
                     "pending_message_ts": pending_message_ts or None,
                     "route_mode": answer_payload.get("route_mode"),
                     "answer_snapshot_id": answer_payload["answer_snapshot_id"],

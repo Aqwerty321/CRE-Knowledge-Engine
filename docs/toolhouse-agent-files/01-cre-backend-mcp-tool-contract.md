@@ -153,6 +153,8 @@ Current local-only helper, useful for tests but not the real Toolhouse worker:
 
 Usage rule: follow `recommended_mcp_calls` unless the user question clearly needs a different backend lookup. The manifest is a navigation aid, not a replacement for cited evidence IDs.
 
+Empty-bundle rule: when `bundle_shape.evidence_count` is 0, `Look deeper` is still allowed. Use the recommended MCP calls to broaden safely: inspect schema/context, search properties and source chunks, use coordinator tools when they fit, and call `expand_query_evidence` before citing any newly discovered backend result. If Slack context is present for a follow-up question, read Slack history only to identify the antecedent, then verify and cite through CRE Backend MCP.
+
 ## Tool Contracts
 
 ### `explain_evidence`

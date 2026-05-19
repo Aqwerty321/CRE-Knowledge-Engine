@@ -183,6 +183,7 @@ def _recommended_mcp_calls(explain_payload: dict[str, Any]) -> list[dict[str, ob
     snapshot = explain_payload.get("answer_snapshot") if isinstance(explain_payload.get("answer_snapshot"), dict) else {}
     filters = snapshot.get("filters") if isinstance(snapshot.get("filters"), dict) else {}
     query_constructor = filters.get("query_constructor") if isinstance(filters.get("query_constructor"), dict) else None
+    evidence_count = int(explain_payload.get("evidence_count") or 0)
     calls: list[dict[str, object]] = [
         {
             "tool": "explain_evidence",
@@ -195,6 +196,31 @@ def _recommended_mcp_calls(explain_payload: dict[str, Any]) -> list[dict[str, ob
             "arguments": {},
         },
     ]
+    if evidence_count == 0:
+        calls.extend(
+            [
+                {
+                    "tool": "expand_query_context",
+                    "why": "Confirm this is an empty evidence bundle, inspect aggregate context, and read the backend tool map before broadening.",
+                    "arguments": {"query_id": explain_payload.get("query_id"), "include_source_details": False, "max_sources": 0},
+                },
+                {
+                    "tool": "search_properties",
+                    "why": "Try a broad structured-property search from any concrete property, market, type, or source terms in the user question or recovered Slack antecedent.",
+                    "arguments": {"filters": {"keywords": [str(explain_payload.get("query_text") or "")], "limit": 10}},
+                },
+                {
+                    "tool": "search_source_chunks",
+                    "why": "Search raw source text for the user question terms before deciding that backend evidence is missing.",
+                    "arguments": {"query": explain_payload.get("query_text"), "filters": {"limit": 10}},
+                },
+                {
+                    "tool": "audit_data",
+                    "why": "Use when the right answer may be that the corpus lacks enough evidence for the requested fact.",
+                    "arguments": {},
+                },
+            ]
+        )
     if query_constructor is not None:
         calls.append(
             {
@@ -251,7 +277,7 @@ def build_evidence_context(
     source_documents = [_source_document(item) for item in evidence]
     return {
         "policy_version": "evidence-context-v2",
-        "scope": "The initial bundle contains backend-selected evidence for this query. Toolhouse may use read-only MCP tools for context and expand_query_evidence for more backend-minted citation IDs.",
+        "scope": "The initial bundle contains backend-selected evidence for this query. If it is empty, Toolhouse may still use read-only MCP search/coordinator tools and expand_query_evidence for backend-minted citation IDs before answering.",
         "citation_rule": "Final answered CRE claims must cite evidence IDs in allowed_evidence_ids. If a useful MCP result has no allowed ID, call expand_query_evidence or mark the claim as needing more evidence.",
         "bundle_shape": {
             "evidence_count": len(evidence),

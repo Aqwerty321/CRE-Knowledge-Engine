@@ -225,3 +225,4 @@ def test_unsupported_query_records_failed_mode_without_evidence(
     assert payload["route_mode"] == "failed"
     assert payload["evidence_count"] == 0
     assert "Unsupported query" in payload["rendered_answer"]
+    assert "Look deeper" in payload["rendered_answer"]

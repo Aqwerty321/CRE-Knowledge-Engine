@@ -36,5 +36,7 @@ def test_build_toolhouse_message_preserves_query_package_shape() -> None:
     assert '"task": "look_deeper"' in message
     assert '"query_id": "query-1"' in message
     assert "Use CRE Backend MCP first" in message
+    assert "If the initial evidence bundle is empty" in message
+    assert "return needs_more_evidence or external_context_only" in message
     assert "Keep rendered_answer terse and aligned with the backend instant-answer style" in message
     assert "comparison_table object" in message
