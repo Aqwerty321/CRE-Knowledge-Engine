@@ -28,12 +28,12 @@ The Toolhouse worker owns:
 - MCP transport: Streamable HTTP from the official Python MCP SDK.
 - Local mounted path: `/toolhouse/mcp` on the existing FastAPI backend.
 - Public demo URL shape: `https://<public-backend-host>/toolhouse/mcp`.
-- Tool behavior: read-only.
+- Tool behavior: non-destructive; no source, property, Slack, file, job, or database mutation beyond backend-controlled query-scoped evidence expansion.
 - Tool authentication: `Authorization: Bearer <CRE_TOOLHOUSE_MCP_BEARER_TOKEN>`.
 - URL-only Toolhouse setup can use `https://<public-backend-host>/toolhouse/mcp?mcp_token=<CRE_TOOLHOUSE_MCP_BEARER_TOKEN>` if the UI does not expose an auth-header field.
 - Required backend env var: `CRE_TOOLHOUSE_MCP_BEARER_TOKEN`.
 - Toolhouse must not receive direct database credentials.
-- Toolhouse must not mutate records, Slack messages, files, or source documents.
+- Toolhouse must not mutate source records, property records, Slack messages, files, jobs, or source documents. Only backend tools may append query-scoped evidence IDs for the active query.
 - If the MCP server is unavailable, return `mcp_unavailable` in the worker output.
 
 The backend returns `503 mcp_auth_not_configured` if the MCP bearer token is not set, and `401 unauthorized` if the bearer token is missing or wrong. Use a dedicated MCP token, not the Toolhouse Workers API key, in MCP URL or header auth.
@@ -46,6 +46,13 @@ Current backend wrappers implemented in `app/toolhouse/tools.py`:
 
 - `explain_evidence`
 - `explain_query`
+- `describe_backend_schema`
+- `expand_query_context`
+- `expand_query_evidence`
+- `summarize_inventory`
+- `rank_properties`
+- `get_property_timeline`
+- `find_property_conflicts`
 - `search_properties`
 - `get_source_detail`
 - `aggregate_properties`
@@ -126,6 +133,26 @@ Current local-only helper, useful for tests but not the real Toolhouse worker:
 }
 ```
 
+### Evidence Context
+
+`explain_evidence` and the backend escalation payload include an `evidence_context` object. Use it as the compact operating map for the run.
+
+```json
+{
+  "policy_version": "evidence-context-v2",
+  "scope": "Initial backend-selected evidence plus MCP expansion guidance.",
+  "citation_rule": "Final answered CRE claims must cite allowed evidence IDs.",
+  "bundle_shape": {"evidence_count": 5, "source_count": 3},
+  "coverage": {"property_types": {"industrial": 4}, "markets": {"Harbor District": 2}},
+  "evidence_manifest": [],
+  "source_manifest": [],
+  "available_backend_mcp_tools": [],
+  "recommended_mcp_calls": []
+}
+```
+
+Usage rule: follow `recommended_mcp_calls` unless the user question clearly needs a different backend lookup. The manifest is a navigation aid, not a replacement for cited evidence IDs.
+
 ## Tool Contracts
 
 ### `explain_evidence`
@@ -203,6 +230,180 @@ Output:
 ```
 
 Usage rule: use when route mode, filters, answer provenance, missing-data explanation, or decision summary matters.
+
+### `describe_backend_schema`
+
+Status: implemented now.
+
+Input:
+
+```json
+{}
+```
+
+Output:
+
+```json
+{
+  "tool": "describe_backend_schema",
+  "status": "ok",
+  "schema_version": "cre-backend-mcp-v2",
+  "property_filters": {},
+  "coordinator_tools": {},
+  "aggregation": {},
+  "safe_examples": []
+}
+```
+
+Usage rule: call this when you are unsure which filters, sort modes, metrics, or coordinator tools are safe.
+
+### `expand_query_context`
+
+Status: implemented now.
+
+Input:
+
+```json
+{"query_id": "uuid", "include_source_details": true, "max_sources": 8}
+```
+
+Output:
+
+```json
+{
+  "tool": "expand_query_context",
+  "status": "ok | not_ready",
+  "evidence_context": {},
+  "source_details": [],
+  "aggregate_summaries": [],
+  "allowed_evidence_ids": []
+}
+```
+
+Usage rule: use after `explain_evidence` when the initial bundle needs source detail, aggregate context, or replayable explanation.
+
+### `expand_query_evidence`
+
+Status: implemented now.
+
+Input:
+
+```json
+{"query_id": "uuid", "filters": {"property_types": ["industrial"], "limit": 10}, "reason": "add comparable options"}
+```
+
+Output:
+
+```json
+{
+  "tool": "expand_query_evidence",
+  "status": "ok | no_results | query_not_found | snapshot_not_found",
+  "allowed_evidence_ids_added": [],
+  "allowed_evidence_ids_total": [],
+  "results": []
+}
+```
+
+Usage rule: call this before citing a useful backend result that was not in the original `allowed_evidence_ids` set.
+
+### `summarize_inventory`
+
+Status: implemented now.
+
+Input:
+
+```json
+{"filters": {"property_types": ["industrial"], "limit": 25}, "query_id": "uuid"}
+```
+
+Output:
+
+```json
+{
+  "tool": "summarize_inventory",
+  "status": "ok",
+  "by_property_type": {},
+  "by_market": {},
+  "ranked_slices": {"cheapest": {}, "largest": {}, "soonest_available": {}}
+}
+```
+
+Usage rule: use for broad inventory questions and first-pass corpus orientation. Pass `query_id` when ranked slices may be cited.
+
+### `rank_properties`
+
+Status: implemented now.
+
+Input:
+
+```json
+{
+  "filters": {"property_types": ["industrial"], "price_per_sq_ft_lt": "35", "limit": 10},
+  "objective": "logistics tenant fit | cheapest | largest | available soon | balanced",
+  "keywords": ["loading", "yard", "logistics"],
+  "query_id": "uuid"
+}
+```
+
+Output:
+
+```json
+{
+  "tool": "rank_properties",
+  "status": "ok | no_results",
+  "results": [{"rank_score": "0.8700", "rank_reasons": [], "evidence_id": "uuid"}],
+  "evidence_expansion": {}
+}
+```
+
+Usage rule: use this for subjective comparisons. The backend owns score components; Toolhouse may explain them concisely.
+
+### `get_property_timeline`
+
+Status: implemented now.
+
+Input:
+
+```json
+{"property_ref": "88 Foundry Ln | property UUID | duplicate_group_key", "query_id": "uuid"}
+```
+
+Output:
+
+```json
+{
+  "tool": "get_property_timeline",
+  "status": "ok | not_found | invalid_property_ref",
+  "duplicate_group_keys": [],
+  "event_count": 0,
+  "timeline": []
+}
+```
+
+Usage rule: use this when a user asks what changed, why one source won, or whether a property has conflicting history.
+
+### `find_property_conflicts`
+
+Status: implemented now.
+
+Input:
+
+```json
+{"filters": {"limit": 100}, "query_id": "uuid", "limit": 10}
+```
+
+Output:
+
+```json
+{
+  "tool": "find_property_conflicts",
+  "status": "ok | no_conflicts",
+  "conflict_count": 0,
+  "conflicts": []
+}
+```
+
+Usage rule: use this before making confidence-sensitive claims across duplicate or corrected property records.
 
 ### `search_properties`
 

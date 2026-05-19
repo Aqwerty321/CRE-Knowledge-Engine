@@ -17,8 +17,15 @@ def test_cre_mcp_server_registers_expected_tools() -> None:
     tool_names = asyncio.run(collect_tool_names())
 
     assert tool_names == {
+        "describe_backend_schema",
         "explain_evidence",
         "explain_query",
+        "expand_query_context",
+        "expand_query_evidence",
+        "find_property_conflicts",
+        "get_property_timeline",
+        "rank_properties",
+        "summarize_inventory",
         "search_properties",
         "get_source_detail",
         "aggregate_properties",

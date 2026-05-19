@@ -17,6 +17,7 @@ LOADING_ACCESS_CONCEPT = "loading_access_or_yard_space"
 
 SUPPORTED_QUERY_HINTS = [
     "near 123 Main Street",
+    "broad inventory such as list all properties or what do we have",
     "office listings under a $/SF threshold",
     "structured filters such as industrial over 30k SF under $25/SF",
     "exact property lookup such as what do we know about 700 Logistics Pkwy",

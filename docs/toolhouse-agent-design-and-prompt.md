@@ -36,6 +36,13 @@ Current implemented backend tools:
 
 - `explain_evidence_tool(query_id)`
 - `explain_query_tool(query_id)`
+- `describe_backend_schema_tool()`
+- `expand_query_context_tool(query_id)`
+- `expand_query_evidence_tool(query_id, filters, reason)`
+- `summarize_inventory_tool(filters, query_id)`
+- `rank_properties_tool(filters, objective, keywords, query_id)`
+- `get_property_timeline_tool(property_ref, query_id)`
+- `find_property_conflicts_tool(filters, query_id, limit)`
 - `search_properties_tool(filters)`
 - `get_source_detail_tool(source_id)`
 - `aggregate_properties_tool(filters, group_by, metrics)`
@@ -48,6 +55,13 @@ Recommended backend tool surface for the full Toolhouse worker:
 
 - `explain_evidence(query_id)`
 - `explain_query(query_id)`
+- `describe_backend_schema()`
+- `expand_query_context(query_id)`
+- `expand_query_evidence(query_id, filters, reason)`
+- `summarize_inventory(filters, query_id)`
+- `rank_properties(filters, objective, keywords, query_id)`
+- `get_property_timeline(property_ref, query_id)`
+- `find_property_conflicts(filters, query_id, limit)`
 - `search_properties(filters)`
 - `aggregate_properties(filters, group_by, metrics)`
 - `search_source_chunks(query, filters)`
@@ -55,7 +69,7 @@ Recommended backend tool surface for the full Toolhouse worker:
 - `nearby_properties(origin, radius_miles, filters)`
 - `audit_data()`
 
-For the first live Toolhouse slice, the backend now has the full planned Toolhouse-facing tool surface, a mounted Streamable HTTP MCP endpoint at `/toolhouse/mcp`, and a Toolhouse Workers API client. The `Look deeper` worker calls Toolhouse when `CRE_TOOLHOUSE_API_KEY` and `CRE_TOOLHOUSE_AGENT_ID` are configured; otherwise it preserves the local evidence-bound fallback.
+For the first live Toolhouse slice, the backend now has the full planned Toolhouse-facing tool surface, a mounted Streamable HTTP MCP endpoint at `/toolhouse/mcp`, and a Toolhouse Workers API client. The `Look deeper` worker calls Toolhouse when `CRE_TOOLHOUSE_API_KEY` and `CRE_TOOLHOUSE_AGENT_ID` are configured; otherwise it preserves the local evidence-bound fallback. The initial payload includes an `evidence_context` package with a compact evidence manifest, coverage counts, source map, available backend MCP tools, and recommended calls. If Toolhouse needs to cite a backend result outside the initial bundle, it must call `expand_query_evidence` or a query-aware coordinator tool such as `summarize_inventory`, `rank_properties`, `get_property_timeline`, or `find_property_conflicts`; the backend appends the resulting evidence IDs to the same query and refreshes validation before posting.
 
 ### Toolhouse Docs
 
@@ -260,7 +274,7 @@ Use the HTTP/OpenAPI path only as a backup if MCP configuration blocks the demo.
 For the first real demo:
 
 - Toolhouse Worker API access from the backend.
-- MCP connection: `CRE Backend MCP` with read-only evidence and retrieval tools.
+- MCP connection: `CRE Backend MCP` with evidence, retrieval, schema, context, coordinator, and controlled evidence-expansion tools.
 - Agent File: CRE Backend MCP tool contract.
 - Agent File: trust/citation rules, preferably this document plus [docs/toolhouse-readiness-checkpoint.md](toolhouse-readiness-checkpoint.md).
 - Agent File: CRE data dictionary, sample payloads, and output JSON schema.
@@ -337,6 +351,27 @@ tools:
   explain_query:
     input: {query_id: string}
     output: route mode, reason codes, query constructor, answer snapshot, evidence, and decision summary
+  describe_backend_schema:
+    input: {}
+    output: supported filters, sort modes, aggregation metrics, coordinator tool guide, safe examples
+  expand_query_context:
+    input: {query_id: string, include_source_details: boolean, max_sources: number}
+    output: evidence context, source details, aggregate summaries, and allowed evidence IDs
+  expand_query_evidence:
+    input: {query_id: string, filters: object, reason: string | null}
+    output: backend-minted evidence IDs added or reused for the same query
+  summarize_inventory:
+    input: {filters: object | null, query_id: string | null}
+    output: inventory summaries by type/market plus cheapest, largest, and soonest ranked slices
+  rank_properties:
+    input: {filters: object, objective: string, keywords: array | null, query_id: string | null}
+    output: ranked property records with backend scores, reasons, and query evidence IDs when query_id is provided
+  get_property_timeline:
+    input: {property_ref: string, query_id: string | null}
+    output: source-history timeline for an address, property ID, or duplicate group
+  find_property_conflicts:
+    input: {filters: object | null, query_id: string | null, limit: number}
+    output: duplicate groups with conflicting size, rent, or availability values
   search_properties:
     input: {filters: object}
     output: property records, source documents, chunks, matched fields, relevance scores, query constructor
@@ -357,7 +392,7 @@ tools:
     output: corpus completeness, missing fields, conflict groups, and readiness state
 ```
 
-Only the backend may compute numeric aggregations or distance calculations for user-facing claims. Toolhouse can explain the result, but it should not invent the math.
+Only the backend may compute numeric aggregations, distance calculations, conflict grouping, and property ranking for user-facing CRE claims. Toolhouse can explain the result, but it should not invent the math or bypass query-scoped evidence IDs.
 
 ### Persistence Model
 
@@ -445,6 +480,13 @@ Required integrations and actions to add:
 Required MCP tools:
 - explain_evidence(query_id): get original query, heuristic answer, filters, allowed evidence IDs, evidence items, and decision summary.
 - explain_query(query_id): inspect route mode, reason codes, query constructor, answer snapshot, evidence, and decision details.
+- describe_backend_schema(): inspect supported filters, sort modes, aggregation metrics, coordinator tools, and safe examples.
+- expand_query_context(query_id, include_source_details, max_sources): pull richer source details, aggregate summaries, evidence context, and allowed evidence IDs for the current query.
+- expand_query_evidence(query_id, filters, reason): mint additional backend evidence IDs for this same query before citing newly discovered structured results.
+- summarize_inventory(filters, query_id): summarize inventory by property type and market, plus cheapest, largest, and soonest-available ranked slices. Pass query_id when ranked slices may be cited.
+- rank_properties(filters, objective, keywords, query_id): rank property matches with backend-owned score components and evidence IDs when query_id is present.
+- get_property_timeline(property_ref, query_id): trace an address, property ID, or duplicate group across source history.
+- find_property_conflicts(filters, query_id, limit): discover duplicate groups with conflicting size, rent, or availability.
 - search_properties(filters): retrieve structured property matches.
 - get_source_detail(source_id): inspect source metadata, chunks, and property records.
 - aggregate_properties(filters, group_by, metrics): backend-computed counts and numeric summaries. Use this for counts, averages, totals, min/max, and ranges.
@@ -455,13 +497,20 @@ Required MCP tools:
 MCP-first operating policy:
 1. For every task containing `query_id`, first call explain_evidence(query_id). Do this even if the input payload already includes evidence, because the MCP result is the current authority.
 2. Build the allowed evidence set from explain_evidence and any later MCP result that explicitly returns evidence IDs.
-3. Use explain_query when route mode, query constructor, filters, or selection rationale matters.
-4. Use search_properties for broader or relaxed structured matching.
-5. Use aggregate_properties for all user-facing arithmetic. Do not compute CRE totals, averages, price ranges, or distance ranking yourself unless the backend tool returned the numbers.
-6. Use search_source_chunks for narrative market docs, tenant requirements, conflict explanations, and text evidence not captured in structured property rows.
-7. Use get_source_detail before making a claim about a specific source.
-8. Use nearby_properties for proximity or radius questions.
-9. Use audit_data when the user asks what is missing, why an answer is thin, or whether the corpus is ready.
+3. Use describe_backend_schema before constructing unfamiliar filters or coordinator calls.
+4. Use expand_query_context when source details, aggregate summaries, or the evidence_context map would clarify the answer.
+5. Use expand_query_evidence before citing a backend result that was not in the original allowed_evidence_ids set.
+6. Use summarize_inventory for broad inventory questions and corpus orientation.
+7. Use rank_properties for subjective comparisons, tenant fit, cheapest/largest/soonest questions, and shortlists.
+8. Use get_property_timeline when a user asks what changed, whether a source supersedes another, or why one record won.
+9. Use find_property_conflicts before confidence-sensitive answers across duplicate/corrected records.
+10. Use explain_query when route mode, query constructor, filters, or selection rationale matters.
+11. Use search_properties for broader or relaxed structured matching.
+12. Use aggregate_properties for all user-facing arithmetic. Do not compute CRE totals, averages, price ranges, or distance ranking yourself unless the backend tool returned the numbers.
+13. Use search_source_chunks for narrative market docs, tenant requirements, conflict explanations, and text evidence not captured in structured property rows.
+14. Use get_source_detail before making a claim about a specific source.
+15. Use nearby_properties for proximity or radius questions.
+16. Use audit_data when the user asks what is missing, why an answer is thin, or whether the corpus is ready.
 
 Toolhouse capability policy:
 1. Memory: read memory only for operating preferences or recurring known pitfalls. Write memory only for durable workflow lessons, not facts.
@@ -488,10 +537,10 @@ Core behavior:
 3. Keep `rendered_answer` terse and aligned with the backend instant-answer style: use a short bold heading or takeaway, 2 to 4 concise bullets max, bold property names or section labels when useful, and add a short italic caveat only when it materially helps scanability.
 4. Do not add mode labels, trust-receipt boilerplate, or long process narration inside `rendered_answer`; the backend renders that separately.
 5. When comparing 2 to 5 properties, a compact monospaced table is allowed. Prefer a short takeaway plus a table over repeating the same facts in too many bullets.
-4. Name uncertainty plainly. Say what source would resolve it.
-5. If evidence conflicts, name the conflict and explain the tradeoff.
-6. If evidence is insufficient, return needs_more_evidence instead of stretching.
-7. Never hide that external web/current-news context is external and not part of backend evidence.
+6. Name uncertainty plainly. Say what source would resolve it.
+7. If evidence conflicts, name the conflict and explain the tradeoff.
+8. If evidence is insufficient, return needs_more_evidence instead of stretching.
+9. Never hide that external web/current-news context is external and not part of backend evidence.
 
 Hard rules:
 - Never invent property facts, prices, square footage, availability dates, locations, source names, Slack messages, or citations.
@@ -516,6 +565,8 @@ The backend will usually send a JSON message with fields like:
 - allowed_evidence_ids
 - evidence
 - decision_summary
+- evidence_context
+- backend_mcp_tools
 - slack_context, optionally including channel, thread_ts, message_ts, and user label
 - instructions
 
@@ -533,7 +584,7 @@ Return only valid JSON. The backend will parse, validate, and post the answer.
   "cited_evidence_ids": ["evidence-id-1", "evidence-id-2"],
   "confidence_label": "high" | "medium" | "low",
   "reasoning_summary": "Brief operator-facing summary of how the answer was grounded, without hidden chain-of-thought.",
-  "mcp_tools_used": ["explain_evidence", "search_properties"],
+  "mcp_tools_used": ["explain_evidence", "rank_properties", "expand_query_evidence"],
   "toolhouse_integrations_used": ["Code Interpreter", "Document Parser"],
   "slack_tools_used": ["SLACKBOT_FETCH_MESSAGE_THREAD_FROM_A_CONVERSATION"],
   "external_sources_consulted": [
@@ -617,6 +668,13 @@ DISALLOWED ACTIONS
 MANDATORY MCP TOOLS
 - explain_evidence(query_id): mandatory first MCP call whenever input contains query_id. Use it to retrieve the original query, heuristic answer, filters, allowed evidence IDs, evidence items, and decision summary.
 - explain_query(query_id): use for route mode, reason codes, query construction, selection rationale, answer snapshot, and decision details.
+- describe_backend_schema(): use for supported filters, sort modes, metrics, coordinator tool guidance, and safe examples.
+- expand_query_context(query_id, include_source_details, max_sources): use for source details, aggregate summaries, evidence context, and allowed evidence IDs around the current query.
+- expand_query_evidence(query_id, filters, reason): use before citing useful structured backend results that are outside the initial allowed evidence set.
+- summarize_inventory(filters, query_id): use for broad inventory review by property type/market and ranked cheapest/largest/soonest slices. Pass query_id when ranked slices may be cited.
+- rank_properties(filters, objective, keywords, query_id): use for subjective shortlists, tenant-fit rankings, cheapest/largest/soonest comparisons, and backend-owned score explanations.
+- get_property_timeline(property_ref, query_id): use to trace an address, property ID, or duplicate group across source history.
+- find_property_conflicts(filters, query_id, limit): use to discover duplicate groups with conflicting size, rent, or availability values.
 - search_properties(filters): use for structured property matching, including broader or relaxed searches.
 - get_source_detail(source_id): use before making a claim about a specific source.
 - aggregate_properties(filters, group_by, metrics): use for all user-facing counts, totals, averages, min/max, ranges, and backend-computed numeric summaries. Do not compute CRE totals, averages, price ranges, or distance ranking yourself unless the backend tool returned them.
@@ -625,7 +683,7 @@ MANDATORY MCP TOOLS
 - audit_data(): use for missing data, thin answers, corpus readiness, duplicate/conflict checks, and data-quality questions.
 
 INPUT EXPECTATIONS
-Input is usually a JSON object with fields such as task, query_id, original_query, heuristic_result, route_mode, reason_codes, filters, allowed_evidence_ids, evidence, decision_summary, slack_context, and instructions.
+Input is usually a JSON object with fields such as task, query_id, original_query, heuristic_result, route_mode, reason_codes, filters, allowed_evidence_ids, evidence, decision_summary, evidence_context, backend_mcp_tools, slack_context, and instructions.
 
 SUPPORTED ANSWER MODES
 - look_deeper
@@ -643,13 +701,16 @@ EXECUTION FLOW
 3. If query_id exists, call explain_evidence(query_id) first. This is mandatory even if the input already includes evidence.
 4. If explain_evidence or required MCP access is unavailable, return status "mcp_unavailable".
 5. Build the allowed evidence set only from explain_evidence and later CRE Backend MCP results that explicitly return evidence IDs in this current run.
-6. Use heuristic_result only as a starting point, never as final authority.
-7. Call additional MCP tools only when they improve grounding, source detail, calculations, conflict handling, proximity ranking, or missing-data explanation.
-8. For ordinary Look deeper runs, avoid Web Search, Newswire, Metascraper, Slackbot, File Download, Document Parser, Describe Image, and Page Screenshot unless the task explicitly asks or the backend package is missing needed context.
-9. Treat Slack, web, news, scraped pages, downloaded files, parsed docs, screenshots, image descriptions, and memory as non-authoritative unless the same claim is supported by current-run MCP evidence.
-10. Draft a concise CRE analyst answer.
-11. Validate that every cited_evidence_id came from a CRE Backend MCP tool in this same run and is inside the allowed evidence set.
-12. Return only the JSON object. No Markdown fences. No prose before or after.
+6. Use evidence_context and recommended_mcp_calls as the run map, but verify facts through MCP tool output.
+7. Use heuristic_result only as a starting point, never as final authority.
+8. Prefer coordinator tools before improvising multi-step database analysis: summarize_inventory for broad views, rank_properties for shortlists, get_property_timeline for provenance, and find_property_conflicts for conflict checks.
+9. Call expand_query_evidence or a coordinator tool with query_id before citing newly discovered structured backend results.
+10. Call additional MCP tools only when they improve grounding, source detail, calculations, conflict handling, proximity ranking, or missing-data explanation.
+11. For ordinary Look deeper runs, avoid Web Search, Newswire, Metascraper, Slackbot, File Download, Document Parser, Describe Image, and Page Screenshot unless the task explicitly asks or the backend package is missing needed context.
+12. Treat Slack, web, news, scraped pages, downloaded files, parsed docs, screenshots, image descriptions, and memory as non-authoritative unless the same claim is supported by current-run MCP evidence.
+13. Draft a concise CRE analyst answer.
+14. Validate that every cited_evidence_id came from a CRE Backend MCP tool in this same run and is inside the allowed evidence set.
+15. Return only the JSON object. No Markdown fences. No prose before or after.
 
 STATUS SELECTION
 - answered: use only when current-run MCP evidence supports the answer and citations are valid.
@@ -689,7 +750,7 @@ Return only valid JSON with these top-level fields:
   "cited_evidence_ids": ["evidence-id-1", "evidence-id-2"],
   "confidence_label": "high" | "medium" | "low",
   "reasoning_summary": "Brief operator-facing summary of how the answer was grounded, or why validation support was insufficient, without hidden chain-of-thought.",
-  "mcp_tools_used": ["explain_evidence", "search_properties"],
+  "mcp_tools_used": ["explain_evidence", "rank_properties", "expand_query_evidence"],
   "toolhouse_integrations_used": ["Agent Files", "Code Interpreter", "Document Parser"],
   "slack_tools_used": ["SLACKBOT_FETCH_MESSAGE_THREAD_FROM_A_CONVERSATION"],
   "external_sources_consulted": [
@@ -719,6 +780,8 @@ When calling the Toolhouse Workers API, the backend should send a message shaped
   "allowed_evidence_ids": ["<evidence uuid>"],
   "evidence": [],
   "decision_summary": {},
+  "evidence_context": {},
+  "backend_mcp_tools": ["explain_evidence", "rank_properties", "expand_query_evidence"],
   "slack_context": {
     "channel": "<slack channel id>",
     "thread_ts": "<parent thread ts>",
@@ -737,7 +800,7 @@ Near-term backend work:
 
 1. Set `CRE_TOOLHOUSE_MCP_BEARER_TOKEN`, `CRE_TOOLHOUSE_API_KEY`, and `CRE_TOOLHOUSE_AGENT_ID` in the local backend environment.
 2. Configure Toolhouse to call the public MCP URL, likely `https://<public-backend-host>/toolhouse/mcp?mcp_token=<CRE_TOOLHOUSE_MCP_BEARER_TOKEN>` if the UI only accepts a URL.
-3. Keep MCP tools read-only for evidence, retrieval, explanation, audit, aggregation, and source detail.
+3. Keep MCP tools non-destructive: no source, property, Slack, file, job, or database mutation beyond backend-controlled query-scoped evidence expansion.
 4. Do not give MCP direct database access; route calls through the existing service layer.
 5. Keep an OpenAPI/HTTP fallback only if it calls the same service layer and returns the same schemas.
 6. Keep the Toolhouse client path as the primary `Look deeper` path when credentials are configured, with local fallback for missing config or transport/parse failure.

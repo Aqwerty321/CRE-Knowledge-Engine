@@ -13,7 +13,7 @@ from app.answering.query_service import answer_query, explain_query
 from app.db.session import SessionFactory, engine
 from app.evaluation import replay_query, run_golden_evals
 from app.ingestion.sample_importer import import_sample_data
-from app.models import AnswerSnapshot, EvidenceItem, Query
+from app.models import AnswerSnapshot, EvidenceItem, Query, SourceDocument
 
 
 def _ensure_schema() -> None:
@@ -21,12 +21,13 @@ def _ensure_schema() -> None:
 
 
 async def _prepare_query_database() -> None:
-    await import_sample_data(Path("sample-data"))
     async with SessionFactory() as session:
         async with session.begin():
             await session.execute(delete(AnswerSnapshot))
             await session.execute(delete(EvidenceItem))
             await session.execute(delete(Query))
+            await session.execute(delete(SourceDocument))
+    await import_sample_data(Path("sample-data"))
 
 
 @pytest.fixture
@@ -151,6 +152,49 @@ def test_tenant_fit_shortlist_uses_expanded_last_mile_evidence(
     assert explain_payload["decision_summary"]["retrieval_mode"] == "structured_tenant_fit"
     assert explain_payload["evidence"][0]["evidence_role"] == "selected"
     assert explain_payload["evidence"][0]["source_document"]["file_name"] == "last-mile-industrial-watchlist.csv"
+
+
+@pytest.mark.golden
+def test_common_broad_inventory_query_returns_sourced_snapshot(
+    prepared_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = async_runner.run(answer_query("list all properties"))
+
+    assert payload["status"] == "answered"
+    assert payload["route_mode"] == "instant"
+    assert "broad_inventory" in payload["reason_codes"]
+    assert payload["evidence_count"] >= 10
+    assert {"120 Main St", "18 Beacon Freight", "240 Harbor Rd"}.issubset(set(payload["matched_addresses"]))
+    assert "Inventory snapshot" in payload["rendered_answer"]
+    assert "Use *Look deeper*" in payload["rendered_answer"]
+
+    explain_payload = async_runner.run(explain_query(payload["query_id"]))
+
+    assert explain_payload["decision_summary"]["query_constructor"]["base_table"] == "property_records"
+    assert explain_payload["decision_summary"]["query_constructor"]["limit"] >= 25
+
+
+@pytest.mark.golden
+def test_common_sort_only_query_uses_dynamic_structured_search(
+    prepared_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = async_runner.run(answer_query("show me the cheapest properties"))
+
+    assert payload["status"] == "answered"
+    assert payload["route_mode"] == "instant"
+    assert "sort_price" in payload["reason_codes"]
+    assert payload["filters"]["query_constructor"]["sort"] == "price_asc"
+    assert "Direct match" in payload["rendered_answer"]
+
+    explain_payload = async_runner.run(explain_query(payload["query_id"]))
+    prices = [
+        float(item["property_record"]["price_per_sq_ft"])
+        for item in explain_payload["evidence"]
+        if item.get("property_record") and item["property_record"].get("price_per_sq_ft") is not None
+    ]
+    assert prices == sorted(prices)
 
 
 @pytest.mark.golden

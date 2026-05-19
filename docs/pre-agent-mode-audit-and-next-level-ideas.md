@@ -90,6 +90,8 @@ Current full-suite validation:
 uv run pytest -q
 ```
 
+Current result: 100 passed.
+
 Result:
 
 - 97 tests pass after the Slack UX hardening, source-receipt/table support, live Toolhouse smoke slice, native parser fixtures, Slack ingestion pass, source-post receipt trail, agent-run persistence, golden eval harness, query replay pass, demo dry run, secret scan, expanded corpus battery, and submission report pass;

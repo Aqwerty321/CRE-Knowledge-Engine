@@ -41,7 +41,7 @@ The implementation-facing sources of truth are now:
 - The configured MCP entries are Toolhouse and `graphifyLocal`, defined in [.vscode/mcp.json](.vscode/mcp.json).
 - `graphify-out/graph.json` exists and was rebuilt on 2026-05-19.
 - Verified graph stats: 767 nodes, 1345 edges, 56 communities.
-- Current full-suite validation: `uv run pytest -q` passes 97 tests.
+- Current full-suite validation: `uv run pytest -q` passes 100 tests.
 
 ## Working guidance
 

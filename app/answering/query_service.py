@@ -566,6 +566,8 @@ async def _retrieve_evidence(session: AsyncSession, plan: QueryPlan) -> list[Ret
         return await _retrieve_harbor_conflict(session, plan)
     if plan.query_type == "generic_property_search":
         return await _retrieve_generic_property_search(session, plan)
+    if plan.query_type == "generic_inventory_overview":
+        return await _retrieve_generic_property_search(session, plan)
     if plan.query_type == "generic_exact_lookup":
         return await _retrieve_generic_exact_lookup(session, plan)
     if plan.query_type == "generic_aggregation":
@@ -676,6 +678,50 @@ def _render_generic_property_search(plan: QueryPlan, items: list[RetrievedEviden
             f"{item.property_record.availability or 'availability unknown'}. Source: {item.source_summary}"
         )
     lines.extend(["", f"_Direct match - {len(items)} source(s) checked._"])
+    return "\n".join(lines)
+
+
+def _render_inventory_overview(plan: QueryPlan, items: list[RetrievedEvidence]) -> str:
+    type_counts: dict[str, int] = {}
+    market_counts: dict[str, int] = {}
+    for item in items:
+        property_type = _format_property_type(item.property_record.property_type or "unknown")
+        type_counts[property_type] = type_counts.get(property_type, 0) + 1
+        if item.property_record.market:
+            market_counts[item.property_record.market] = market_counts.get(item.property_record.market, 0) + 1
+
+    type_summary = ", ".join(f"{name}: {count}" for name, count in sorted(type_counts.items())) or "no typed records"
+    market_summary = ", ".join(
+        f"{name}: {count}" for name, count in sorted(market_counts.items(), key=lambda item: (-item[1], item[0]))[:5]
+    ) or "market coverage still sparse"
+    sort_label = {
+        "availability_asc": "soonest availability first",
+        "price_asc": "lowest asking rent first",
+        "size_desc": "largest spaces first",
+    }.get(str(plan.filters.get("sort") or ""), "source authority and freshness first")
+
+    lines = [
+        "*Inventory snapshot from sourced property records*",
+        f"I found {len(items)} deduped sourced propert{'y' if len(items) == 1 else 'ies'} in the current slice.",
+        f"- By type: {type_summary}.",
+        f"- Top markets: {market_summary}.",
+        f"- Sort used: {sort_label}.",
+        "",
+        "*Properties:*",
+    ]
+    for item in items:
+        lines.append(
+            f"- *{item.property_record.address}* - {_format_property_type(item.property_record.property_type)}, "
+            f"{_format_sq_ft(item.property_record.sq_ft)} at {_format_price(item.property_record.price_per_sq_ft)}, "
+            f"{item.property_record.availability or 'availability unknown'}. Source: {item.source_summary}"
+        )
+
+    lines.extend(
+        [
+            "",
+            "_This is a broad inventory view from structured records. Use *Look deeper* if you want Toolhouse to compare, rank, or turn this evidence bundle into a recommendation._",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -869,6 +915,9 @@ def _render_answer(
 
     if plan.query_type == "generic_property_search":
         return _render_generic_property_search(plan, items)
+
+    if plan.query_type == "generic_inventory_overview":
+        return _render_inventory_overview(plan, items)
 
     if plan.query_type == "generic_exact_lookup":
         return _render_generic_exact_lookup(items)
@@ -1136,7 +1185,7 @@ async def explain_query(query_id: str) -> dict[str, object]:
                 "retrieval_mode": dependency_state.get("retrieval_mode"),
             }
 
-        if plan.query_type in {"generic_property_search", "generic_exact_lookup", "generic_aggregation"} and evidence_bundle:
+        if plan.query_type in {"generic_property_search", "generic_inventory_overview", "generic_exact_lookup", "generic_aggregation"} and evidence_bundle:
             selected_addresses: list[str] = []
             for item in evidence_bundle:
                 property_record = item["property_record"]

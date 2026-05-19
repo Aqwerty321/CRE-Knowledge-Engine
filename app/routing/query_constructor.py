@@ -83,6 +83,38 @@ SUBJECTIVE_TERMS = {
 LISTING_VERBS = {"show", "find", "list", "which", "what", "give", "pull"}
 AGGREGATION_TERMS = {"total", "sum", "count", "how many", "average", "avg"}
 MISSING_DATA_TERMS = {"missing", "unknown", "incomplete", "coverage", "data quality"}
+INVENTORY_NOUNS = {
+    "availabilities",
+    "availability",
+    "buildings",
+    "deals",
+    "inventory",
+    "listings",
+    "options",
+    "opportunities",
+    "properties",
+    "property",
+    "sites",
+    "spaces",
+}
+INVENTORY_PHRASES = {
+    "all listings",
+    "all options",
+    "all properties",
+    "available options",
+    "current inventory",
+    "in our database",
+    "in the database",
+    "list all",
+    "show all",
+    "show me all",
+    "what do we have",
+    "what is available",
+    "what listings",
+    "what options",
+    "what properties",
+    "what's available",
+}
 
 
 @dataclass(frozen=True)
@@ -145,6 +177,24 @@ def _extract_limit(normalized: str) -> int:
     if match:
         return max(1, min(10, int(match.group(1))))
     return 5
+
+
+def _asks_for_listing(normalized: str) -> bool:
+    return any(normalized.startswith(verb) or f" {verb} " in f" {normalized} " for verb in LISTING_VERBS)
+
+
+def _asks_for_inventory(normalized: str) -> bool:
+    if any(phrase in normalized for phrase in INVENTORY_PHRASES):
+        return True
+    if not any(noun in normalized for noun in INVENTORY_NOUNS):
+        return False
+    return _asks_for_listing(normalized) or any(term in normalized for term in ("all", "any", "available", "have"))
+
+
+def _inventory_limit(normalized: str, requested_limit: int) -> int:
+    if any(term in normalized for term in ("all", "inventory", "database", "what do we have")):
+        return max(requested_limit, 25)
+    return max(requested_limit, 10)
 
 
 def _parse_compact_number(raw_value: str, suffix: str | None = None) -> int:
@@ -400,6 +450,7 @@ def build_structured_query_spec(query_text: str) -> StructuredQuerySpec | None:
         sort = "availability_asc"
         reason_codes.append("sort_availability")
 
+    asks_for_inventory = _asks_for_inventory(normalized)
     has_structured_signal = bool(
         property_types
         or address_terms
@@ -411,13 +462,19 @@ def build_structured_query_spec(query_text: str) -> StructuredQuerySpec | None:
         or sq_ft_gte is not None
         or sq_ft_lte is not None
         or availability_before is not None
+        or sort is not None
     )
-    asks_for_listing = any(normalized.startswith(verb) or f" {verb} " in f" {normalized} " for verb in LISTING_VERBS)
+    asks_for_listing = _asks_for_listing(normalized)
 
     if address_terms and any(term in normalized for term in ("know about", "details", "detail", "tell me about")):
         intent = "exact_lookup"
         confidence = Decimal("0.9400")
         reason_codes.append("exact_lookup")
+    elif asks_for_inventory and not has_structured_signal:
+        intent = "inventory_overview"
+        confidence = Decimal("0.8600")
+        limit = _inventory_limit(normalized, limit)
+        reason_codes.extend(["broad_inventory", "structured_property_search", "toolhouse_escalation_available"])
     elif has_structured_signal and (asks_for_listing or property_types or price_lt is not None or sq_ft_gte is not None):
         intent = "property_search"
         confidence = Decimal("0.9000")

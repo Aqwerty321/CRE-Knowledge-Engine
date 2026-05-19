@@ -92,12 +92,12 @@ The `Look deeper` action:
 
 - immediately posts `On it. Checking the messy bits.` as an ephemeral acknowledgement;
 - queues a `look_deeper` job;
-- packages the stored query and allowed evidence bundle;
+- packages the stored query, allowed evidence bundle, and `evidence_context` manifest;
 - runs a local evidence-bound deeper review;
 - validates cited evidence IDs before posting;
 - posts the result in the original thread.
 
-This is intentionally local for now. The point is to prove the boundary before wiring real Toolhouse credentials.
+Toolhouse receives enough context to reason over the first bundle, and it can call the backend MCP to inspect schema, expand source context, search records, summarize inventory, rank properties, trace property timelines, inspect conflicts, aggregate data, and mint additional query-scoped evidence IDs when the first bundle is too narrow.
 
 ### Toolhouse-Facing Backend Tools
 
@@ -105,6 +105,13 @@ This is intentionally local for now. The point is to prove the boundary before w
 
 - `explain_evidence_tool(query_id)`;
 - `explain_query_tool(query_id)`;
+- `describe_backend_schema_tool()`;
+- `expand_query_context_tool(query_id)`;
+- `expand_query_evidence_tool(query_id, filters, reason)`;
+- `summarize_inventory_tool(filters, query_id)`;
+- `rank_properties_tool(filters, objective, keywords, query_id)`;
+- `get_property_timeline_tool(property_ref, query_id)`;
+- `find_property_conflicts_tool(filters, query_id, limit)`;
 - `search_properties_tool(filters)`;
 - `get_source_detail_tool(source_id)`;
 - `aggregate_properties_tool(filters, group_by, metrics)`;
@@ -113,11 +120,11 @@ This is intentionally local for now. The point is to prove the boundary before w
 - `audit_data_tool()`;
 - `local_deeper_review_tool(query_id)`.
 
-These tools return structured payloads with evidence IDs from query explanation, source metadata, query-constructor details, chunks, property records, aggregations, keyword chunk results, proximity rankings, and data-quality state. They are now exposed through the read-only CRE Backend MCP endpoint for Toolhouse.
+These tools return structured payloads with evidence IDs from query explanation, source metadata, query-constructor details, chunks, property records, inventory summaries, rankings, timelines, conflict groups, aggregations, keyword chunk results, proximity rankings, and data-quality state. `expand_query_evidence_tool` and the query-aware coordinator tools are the controlled exceptions to read-only behavior: they can append backend-selected evidence IDs to the current query so Toolhouse can cite newly discovered backend results without receiving raw database access.
 
 ### Authenticated MCP Endpoint
 
-[app/toolhouse/mcp_server.py](../app/toolhouse/mcp_server.py) now exposes those functions through a read-only FastMCP server.
+[app/toolhouse/mcp_server.py](../app/toolhouse/mcp_server.py) now exposes those functions through a bounded FastMCP server.
 
 Runtime shape:
 
@@ -180,7 +187,7 @@ uv run pytest -q
 
 Current result:
 
-- 97 passed;
+- 100 passed;
 - no known failures or warning noise.
 
 Graphify was also rebuilt after this slice:

@@ -175,6 +175,15 @@ Common filters Toolhouse may see or pass to MCP:
 
 ## Ranking And Conflict Guidance
 
+Use backend coordinator tools for higher-level database work:
+
+- `summarize_inventory` for broad inventory, type/market counts, and cheapest/largest/soonest slices.
+- `rank_properties` for subjective objective scoring such as logistics fit, cheapest, largest, available soon, or balanced review.
+- `get_property_timeline` for provenance history across one address, property ID, or duplicate group.
+- `find_property_conflicts` for duplicate groups with conflicting size, rent, or availability values.
+
+Pass `query_id` to these tools when their results may need to become citable. Returned `evidence_id` values and evidence expansions are backend-minted for that query; raw property IDs, source IDs, chunk IDs, and Slack IDs are not valid citation IDs.
+
 When sources conflict, prefer backend-ranked evidence. If the backend exposes scores, explain the tradeoff using:
 
 1. higher source authority;

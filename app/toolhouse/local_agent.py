@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.answering.query_service import explain_query
+from app.toolhouse.evidence_context import build_evidence_context
 
 
 REQUIRED_RESPONSE_FIELDS = {
@@ -32,13 +33,20 @@ ALLOWED_STATUSES = {
 ALLOWED_CONFIDENCE_LABELS = {"high", "medium", "low"}
 
 ALLOWED_MCP_TOOLS = {
+    "describe_backend_schema",
+    "expand_query_context",
+    "expand_query_evidence",
     "explain_evidence",
     "explain_query",
+    "find_property_conflicts",
+    "get_property_timeline",
     "search_properties",
     "get_source_detail",
     "aggregate_properties",
     "search_source_chunks",
     "nearby_properties",
+    "rank_properties",
+    "summarize_inventory",
     "audit_data",
 }
 
@@ -269,6 +277,8 @@ async def build_escalation_payload(query_id: str) -> dict[str, Any]:
             "explain_payload": explain_payload,
         }
 
+    allowed_evidence_ids = sorted(_allowed_evidence_ids(explain_payload))
+    evidence_context = build_evidence_context(explain_payload, allowed_evidence_ids=allowed_evidence_ids)
     return {
         "status": "ready",
         "query_id": query_id,
@@ -277,8 +287,10 @@ async def build_escalation_payload(query_id: str) -> dict[str, Any]:
         "route_mode": explain_payload.get("route_mode"),
         "reason_codes": explain_payload.get("reason_codes", []),
         "filters": explain_payload.get("answer_snapshot", {}).get("filters", {}),
-        "allowed_evidence_ids": sorted(_allowed_evidence_ids(explain_payload)),
+        "allowed_evidence_ids": allowed_evidence_ids,
         "evidence": explain_payload.get("evidence", []),
+        "evidence_context": evidence_context,
+        "backend_mcp_tools": evidence_context["available_backend_mcp_tools"],
         "decision_summary": explain_payload.get("decision_summary"),
         "explain_payload": explain_payload,
     }

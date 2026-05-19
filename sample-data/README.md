@@ -10,6 +10,8 @@ The current corpus has 23 Slack-shaped sources and 25 seeded property rows. The 
 
 The high-signal expanded queries are:
 
+- `List all properties.`
+- `Show me the cheapest properties.`
 - `What do we know about 18 Beacon Freight?`
 - `Show industrial listings available soon under $35/SF.`
 - `What is the average rent for industrial listings under $35/SF?`

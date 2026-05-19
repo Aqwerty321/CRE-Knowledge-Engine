@@ -163,8 +163,8 @@ File metadata and content should be separated:
 ### Look Deeper
 
 1. User clicks `Look deeper`.
-2. Backend records the action and packages the original query, route decision, and evidence bundle.
-3. Toolhouse worker receives the grounded context and may call backend tools for more evidence.
+2. Backend records the action and packages the original query, route decision, evidence bundle, and evidence-context manifest.
+3. Toolhouse worker receives the grounded context and may call backend tools for schema guidance, source detail, aggregation, chunk search, proximity, and controlled evidence expansion.
 4. Backend updates the existing thread with the expanded answer.
 
 ### Show Sources
@@ -215,14 +215,21 @@ Toolhouse should call backend tools rather than inspect the database directly.
 
 Ambitious MVP tools:
 
+- `describe_backend_schema`;
+- `summarize_inventory`;
+- `rank_properties`;
+- `get_property_timeline`;
+- `find_property_conflicts`;
 - `search_properties`;
 - `aggregate_properties`;
 - `search_source_chunks`;
 - `get_source_detail`;
 - `nearby_properties`;
+- `expand_query_context`;
+- `expand_query_evidence`;
 - `explain_evidence`.
 
-The agent should receive evidence IDs and source summaries, then return a synthesis that the backend formats through the same citation layer.
+The agent should receive evidence IDs and source summaries, then return a synthesis that the backend formats through the same citation layer. If a Toolhouse search or coordinator call finds useful backend context that was not part of the original allowed evidence set, the agent should call `expand_query_evidence` or pass `query_id` to a query-aware coordinator tool before citing it. The backend then refreshes allowed IDs during response validation.
 
 ## Failure Modes
 

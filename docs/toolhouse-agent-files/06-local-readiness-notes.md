@@ -33,6 +33,13 @@ Implemented tools:
 
 - `explain_evidence(query_id)`: returns the escalation payload, local answer, allowed evidence IDs, evidence bundle, filters, and decision summary.
 - `explain_query(query_id)`: returns route mode, reason codes, answer snapshot, query constructor, evidence, missing-data explanation, and data-quality report when available.
+- `describe_backend_schema()`: returns supported filters, sort modes, aggregation metrics, coordinator tool guidance, and safe examples.
+- `expand_query_context(query_id, include_source_details, max_sources)`: returns richer source details, aggregate summaries, evidence context, and allowed evidence IDs for an existing query.
+- `expand_query_evidence(query_id, filters, reason)`: asks the backend to mint additional evidence IDs for the same query through controlled structured retrieval.
+- `summarize_inventory(filters, query_id)`: returns type/market inventory summaries and cheapest/largest/soonest ranked slices; ranked slices mint query evidence when `query_id` is present.
+- `rank_properties(filters, objective, keywords, query_id)`: ranks structured property matches for objectives like logistics fit, cheapest, largest, available soon, or balanced review.
+- `get_property_timeline(property_ref, query_id)`: traces one address/property/duplicate group across source history and can attach query evidence IDs.
+- `find_property_conflicts(filters, query_id, limit)`: finds duplicate property groups with conflicting size, rent, or availability and can expand query evidence for those records.
 - `search_properties(filters)`: deterministic structured property retrieval over normalized Postgres records.
 - `get_source_detail(source_id)`: source metadata, chunks, and property rows for a source document.
 - `aggregate_properties(filters, group_by, metrics)`: backend-computed counts, square-footage totals, average square footage, average rent, and min/max rent by optional group.
@@ -76,8 +83,9 @@ The backend already validates Toolhouse-style responses with `validate_agent_res
 Rules:
 
 - The worker may cite only evidence IDs returned by `explain_evidence` or another backend-validated query evidence path.
-- Broad read-only tools such as `aggregate_properties`, `search_source_chunks`, and `nearby_properties` currently return supporting source/property context but do not mint new query evidence IDs.
-- If those tools uncover useful context that is not in the allowed evidence set, the worker should mention it as supporting context or missing follow-up evidence, not as a cited CRE fact.
+- Broad read-only tools such as `aggregate_properties`, `search_source_chunks`, `nearby_properties`, and `search_properties` return supporting source/property context but do not mint new query evidence IDs by themselves.
+- `expand_query_evidence`, `summarize_inventory`, `rank_properties`, `get_property_timeline`, and `find_property_conflicts` can return query-scoped evidence IDs when `query_id` is provided. Those IDs become valid only after backend validation refresh.
+- If a tool uncovers useful context that is not in the allowed evidence set and has no query-scoped evidence ID, the worker should call an evidence-expanding backend tool or mark the claim as needing more evidence.
 - The backend rejects unsupported citations and invalid Toolhouse output contracts before posting to Slack.
 
 ## Current Data Readiness
@@ -113,6 +121,10 @@ Validated behavior includes:
 - structured property search;
 - source detail lookup;
 - aggregation;
+- inventory summaries;
+- backend-owned ranking;
+- property timeline tracing;
+- conflict discovery;
 - source chunk search;
 - proximity ranking;
 - data audit readiness.
@@ -130,7 +142,9 @@ uv run pytest -q
 
 Current result: tests pass with no known failures or warning noise.
 
-Latest full-suite count: 97 tests passing.
+Latest full-suite count before coordinator pass: 100 tests passing.
+
+Latest focused Toolhouse/MCP count after coordinator pass: 20 tests passing.
 
 Latest live Toolhouse smoke:
 

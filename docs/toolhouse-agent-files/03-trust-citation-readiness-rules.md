@@ -147,12 +147,12 @@ Current validated state:
 - Slack `Show sources` and `Look deeper` actions exist.
 - Postgres stores source documents, chunks, property records, queries, evidence, answer snapshots, Slack events, and jobs.
 - Local `Look deeper` packages an escalation payload and validates cited evidence IDs.
-- Deterministic backend tool functions exist for `explain_evidence`, `explain_query`, `search_properties`, `get_source_detail`, `aggregate_properties`, `search_source_chunks`, `nearby_properties`, and `audit_data`.
+- Deterministic backend tool functions exist for `explain_evidence`, `explain_query`, `describe_backend_schema`, `expand_query_context`, `expand_query_evidence`, `summarize_inventory`, `rank_properties`, `get_property_timeline`, `find_property_conflicts`, `search_properties`, `get_source_detail`, `aggregate_properties`, `search_source_chunks`, `nearby_properties`, and `audit_data`.
 - The CRE Backend MCP server is mounted into the FastAPI app at `/toolhouse/mcp` and protected by `CRE_TOOLHOUSE_MCP_BEARER_TOKEN`.
 - Current audit status: `ready_for_bounded_agent`.
 - Current sample audit summary: 23 source documents, 25 structured property records, 0 sources without chunks, 6 sources with text but no extracted property rows, 6 local Slack-shaped message rows without source URLs before live permalink overlay, 1 explainable Harbor Rd conflict group.
-- Current full-suite validation: `uv run pytest -q` passes 97 tests with no known failures or warning noise.
-- Current focused Toolhouse validation after completing the backend tool surface, Workers API client, and output-contract validation: `uv run pytest tests/test_toolhouse_client.py tests/test_toolhouse_tools.py tests/test_toolhouse_mcp_server.py -q` passes.
+- Current full-suite validation: `uv run pytest -q` passes 100 tests with no known failures or warning noise.
+- Current focused Toolhouse validation after completing the backend tool surface, Workers API client, coordinator tools, and output-contract validation: `uv run pytest tests/test_toolhouse_client.py tests/test_toolhouse_tools.py tests/test_toolhouse_mcp_server.py -q` passes 20 tests.
 - Current live Toolhouse smoke: `uv run cre-cli toolhouse-smoke` returned `answered` with no fallback, 4 allowed evidence IDs, 4 cited evidence IDs, and no schema errors.
 - Graphify stats after rebuild: 767 nodes, 1345 edges, 56 communities.
 

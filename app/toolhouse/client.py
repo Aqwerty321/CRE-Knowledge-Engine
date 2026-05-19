@@ -100,7 +100,12 @@ def build_toolhouse_message(escalation_payload: dict[str, Any]) -> str:
         "instructions": (
             "Use CRE Backend MCP first. Return only the strict JSON object required by the "
             "CRE MCP Look Deeper Analyst output contract. For answered responses, cite at least one "
-            "allowed evidence ID from this run. Do not post to Slack. Keep rendered_answer terse and aligned with "
+            "allowed evidence ID from this run. The initial payload includes evidence_context, backend_mcp_tools, "
+            "and recommended MCP calls. Use describe_backend_schema, expand_query_context, summarize_inventory, "
+            "rank_properties, get_property_timeline, find_property_conflicts, search_properties, aggregate_properties, "
+            "search_source_chunks, get_source_detail, nearby_properties, and audit_data as needed. "
+            "If a useful backend result is not in allowed_evidence_ids, call expand_query_evidence for this query before "
+            "citing it. Do not post to Slack. Keep rendered_answer terse and aligned with "
             "the backend instant-answer style: use a short bold heading or takeaway, 2 to 4 concise bullets max, "
             "no mode labels, no trust-receipt boilerplate, and only a short italic caveat when it materially helps. "
             "When comparing 2 to 5 properties, you may include a compact comparison_table object instead of repeating "
@@ -263,8 +268,10 @@ async def run_toolhouse_deeper_review(
         return payload
 
     response_payload = result.response_payload
+    refreshed_escalation_payload = await build_escalation_payload(query_id)
+    validation_payload = refreshed_escalation_payload if refreshed_escalation_payload.get("status") == "ready" else escalation_payload
     validation = validate_agent_response(
-        allowed_evidence_ids=set(escalation_payload["allowed_evidence_ids"]),
+        allowed_evidence_ids=set(validation_payload["allowed_evidence_ids"]),
         response_payload=response_payload,
     )
     if not validation["valid"]:
@@ -292,6 +299,7 @@ async def run_toolhouse_deeper_review(
             fallback_reason=f"validation_error: {detail or 'invalid Toolhouse response'}",
             rendered_answer=str(fallback_payload.get("rendered_answer") or ""),
             raw_response=result.raw_response,
+            allowed_evidence_ids_json=[str(value) for value in validation_payload.get("allowed_evidence_ids", [])],
             response_payload_json=dict(response_payload),
         )
         fallback_payload["agent_run_id"] = str(agent_run_id)
@@ -309,7 +317,7 @@ async def run_toolhouse_deeper_review(
         "toolhouse_agent_id": result.agent_id,
         "toolhouse_run_id": result.run_id,
         "toolhouse_response": response_payload,
-        "escalation_payload": escalation_payload,
+        "escalation_payload": validation_payload,
     }
     await _finish_agent_run(
         agent_run_id,
@@ -323,6 +331,7 @@ async def run_toolhouse_deeper_review(
         dependency_state_json=dict(payload.get("dependency_state") or {}),
         rendered_answer=str(payload.get("rendered_answer") or ""),
         raw_response=result.raw_response,
+        allowed_evidence_ids_json=[str(value) for value in validation_payload.get("allowed_evidence_ids", [])],
         response_payload_json=dict(response_payload),
     )
     payload["agent_run_id"] = str(agent_run_id)
