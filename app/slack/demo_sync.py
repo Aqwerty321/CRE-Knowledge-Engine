@@ -40,6 +40,13 @@ def _primary_file_channel_map() -> dict[str, str]:
     return channels_by_file
 
 
+def _primary_file_title_map() -> dict[str, str]:
+    titles_by_file: dict[str, str] = {}
+    for seed in build_default_file_seed_plan():
+        titles_by_file.setdefault(seed.file_name, seed.title)
+    return titles_by_file
+
+
 def _primary_message_channel_map() -> dict[str, str]:
     channels_by_text: dict[str, str] = {}
     for seed in build_default_persona_seed_plan():
@@ -91,11 +98,15 @@ def _build_live_file_matches(
     channel_ids: dict[str, str],
 ) -> dict[str, LiveSlackFileMatch]:
     matches: dict[str, LiveSlackFileMatch] = {}
+    titles_by_file = _primary_file_title_map()
 
     for file_name, channel_name in _primary_file_channel_map().items():
+        expected_title = titles_by_file.get(file_name)
         for message in histories[channel_name]:
             for file_payload in list(message.get("files", [])):
-                if str(file_payload.get("name") or "") != file_name:
+                live_name = str(file_payload.get("name") or "")
+                live_title = str(file_payload.get("title") or "")
+                if live_name != file_name and live_title != expected_title:
                     continue
 
                 slack_ts = str(message.get("ts") or "")

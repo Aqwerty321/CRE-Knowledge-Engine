@@ -28,7 +28,7 @@ def test_sample_manifest_loads_seeded_sources() -> None:
     manifest = load_sample_manifest(Path("sample-data"))
 
     assert manifest.channel_name == "cre-listings-demo"
-    assert len(manifest.sources) == 14
+    assert len(manifest.sources) == 23
     assert any(source.source_id == "F1" for source in manifest.sources)
 
 
@@ -189,8 +189,10 @@ def test_persona_seed_plan_contains_threaded_harbor_reply() -> None:
     seed_keys = {seed.seed_key for seed in plan}
     harbor_reply = next(seed for seed in plan if seed.seed_key == "listings_harbor_reply")
 
-    assert len(plan) == 10
+    assert len(plan) == 15
     assert "listings_harbor_correction" in seed_keys
+    assert "listings_beacon_watchlist" in seed_keys
+    assert "market_expansion_brief" in seed_keys
     assert harbor_reply.reply_to_seed_key == "listings_harbor_correction"
 
 
@@ -213,9 +215,10 @@ def test_candidate_message_texts_match_legacy_prefixed_seed() -> None:
 def test_file_seed_plan_matches_runbook_mapping() -> None:
     plan = build_default_file_seed_plan()
 
-    assert len(plan) == 12
-    assert sum(1 for seed in plan if seed.channel_name == "cre-listings") == 6
-    assert sum(1 for seed in plan if seed.channel_name == "cre-market-research") == 4
-    assert sum(1 for seed in plan if seed.channel_name == "cre-private-demo") == 2
+    assert len(plan) == 18
+    assert sum(1 for seed in plan if seed.channel_name == "cre-listings") == 10
+    assert sum(1 for seed in plan if seed.channel_name == "cre-market-research") == 5
+    assert sum(1 for seed in plan if seed.channel_name == "cre-private-demo") == 3
     assert any(seed.file_name == "main-street-office-flyer.pdf" for seed in plan)
+    assert any(seed.file_name == "last-mile-industrial-watchlist.csv" for seed in plan)
     assert any(seed.file_name == "broker-availability-tracker.xlsx" and seed.channel_name == "cre-private-demo" for seed in plan)

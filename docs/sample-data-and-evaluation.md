@@ -2,9 +2,9 @@
 
 ## Dataset Goals
 
-The sample dataset should be small, realistic, and deliberately overlapping. It should prove that the bot can handle Slack messages, PDFs, CSVs, Excel files, duplicates, numeric filters, dates, proximity, and citations.
+The sample dataset should be realistic, deliberately overlapping, and large enough to make the demo feel like a working workspace rather than a canned lookup table. It should prove that the bot can handle Slack messages, PDFs, CSVs, Excel files, duplicates, numeric filters, dates, proximity, citations, noisy operational language, local synthesis, and replay.
 
-Target size: 8 to 10 files plus several Slack messages.
+Current size: 15 files plus 8 Slack-shaped messages, for 23 importable sources and 25 seeded property rows.
 
 The sample dataset is also the reproducible evaluation harness. It should be importable locally without a live Slack workspace while preserving Slack-shaped metadata.
 
@@ -40,6 +40,11 @@ Seed it with:
 | F8 | `slack-field-notes.txt` | Text | Text attachment with messy notes. |
 | F9 | `tenant-requirements-summary.txt` | Text | Synthesis input for recommendations. |
 | F10 | `source-corrections.csv` | CSV | Conflicting freshness example. |
+| F11 | `last-mile-industrial-watchlist.csv` | CSV | Richer last-mile industrial options with truck court and trailer-parking language. |
+| F12 | `client-tour-notes.txt` | Text | Messy tour feedback that overlaps with structured watchlist rows. |
+| F13 | `tenant-expansion-brief.txt` | Text | Tenant-fit context without structured property rows. |
+| F14 | `retail-office-followups.csv` | CSV | More office and retail options for filter and exclusion tests. |
+| F15 | `access-constraints-notes.txt` | Text | Operational caveats without direct structured rows. |
 
 ## Seeded Properties
 
@@ -65,6 +70,12 @@ Property records:
 | 310 Canal Works | mixed_use | 15,600 | 39.00 | May 2026 | 40.74620 | -74.00190 | `broker-availability-tracker.xlsx` sheet `MixedUse` row 2 |
 | 64 Union Yard | industrial | 31,000 | 24.00 | Immediate | 40.75180 | -74.00640 | Slack message by John |
 | 900 North Loop | office | 22,000 | 61.00 | Jan 2027 | 40.76100 | -73.98800 | `downtown-office-inventory.csv` row 5 |
+| 18 Beacon Freight | industrial | 36,000 | 26.00 | Immediate | 40.75090 | -74.00210 | `last-mile-industrial-watchlist.csv` row 2 |
+| 42 Spruce Flex | industrial | 26,000 | 29.50 | Jul 2026 | 40.74710 | -74.00060 | `last-mile-industrial-watchlist.csv` row 3 |
+| 510 River Cold Storage | industrial | 54,000 | 34.50 | Sep 2026 | 40.74120 | -74.00880 | `last-mile-industrial-watchlist.csv` row 4 |
+| 75 Orchard Office | office | 6,800 | 44.00 | Jul 2026 | 40.74600 | -73.99050 | `retail-office-followups.csv` row 2 |
+| 22 Gallery Row | retail | 5,200 | 49.00 | Jun 2026 | 40.75400 | -73.99090 | `retail-office-followups.csv` row 3 |
+| 600 Skyline Office | office | 18,000 | 52.00 | Nov 2026 | 40.75990 | -73.98420 | `retail-office-followups.csv` row 4 |
 
 ## Slack Message Seeds
 
@@ -75,6 +86,10 @@ Sarah: Uploaded the Main Street office flyer. 120 Main is still targeting Q3 202
 John: The Union Yard space at 64 Union Yard is available immediately. Around 31k SF, industrial, asking $24/SF.
 Priya: Harbor Rd got updated yesterday. 240 Harbor is now 62k SF, not 58k. Use the industrial inventory as source of truth.
 Maya: Tenant wants industrial near Main with loading access, ideally under $35/SF and available soon.
+Sarah: Added the last-mile watchlist: 18 Beacon Freight is immediate, 36k SF at $26/SF with two dock doors and a real truck court.
+John: Tour note: 42 Spruce Flex is under budget and has a small shared yard, but ceiling height is only 20 ft.
+Maya: Tenant asked specifically for truck court depth and trailer parking. Beacon and Union Yard are the best in-person fits so far.
+Priya: Cold storage at 510 River is real, but availability slipped to September. Good economics, weaker for the near-term logistics brief.
 ```
 
 ## Golden Queries
@@ -85,12 +100,17 @@ Use these as README examples, demo prompts, and regression tests.
 | --- | --- | --- |
 | `What properties do we have available near 123 Main Street?` | instant | Return 120 Main St and 130 Elm Ave first, sorted by distance, with sources. |
 | `Show office buildings under $50/sq ft.` | instant | Return 120 Main St and 17 Pine St, exclude 900 North Loop. |
-| `What is the total square footage of industrial properties in John's file or notes?` | instant | Resolve John source and return 31,000 sq ft for 64 Union Yard unless another John file is seeded. |
+| `What is the total square footage of industrial properties in John's file or notes?` | instant | Resolve John source and return the deduped John-owned industrial set, including Elm Ave, Beacon, Spruce, and Union Yard. |
+| `What do we know about 18 Beacon Freight?` | instant | Return the exact property profile with watchlist, tour-note, and Slack-message sources. |
+| `Show industrial listings available soon under $35/SF.` | instant | Apply price and availability filters over the larger industrial set. |
+| `What is the average rent for industrial listings under $35/SF?` | instant | Aggregate the deduped industrial set and cite the contributing rows. |
 | `Which industrial listings are under $25/SF and available this year?` | instant | Return 88 Foundry Ln, 240 Harbor Rd, 64 Union Yard, and possibly 700 Logistics Pkwy depending date interpretation. |
 | `Where did the $42/SF number for 120 Main come from?` | instant | Cite the flyer and Sarah's Slack message if both are indexed. |
 | `Summarize the market snapshot and tell me what matters for a logistics tenant.` | agentic | Use Toolhouse path, cite the market PDF and tenant requirements. |
 | `Find listings that mention loading access or yard space.` | hybrid | Search chunks/messages and return matching industrial evidence. |
+| `Find whse opts with trk court and trlr parking.` | hybrid | Use alias expansion, PolyFuzz, and character n-grams to handle shorthand and typos. |
 | `Did anything change for Harbor Rd yesterday?` | hybrid | Use Slack message and CSV freshness to state the square footage correction. |
+| `Which options look best for a logistics tenant under $35/SF available soon?` | hybrid | Run the local tenant-fit heuristic before optional Toolhouse review. |
 | `What are the best three options for a tenant needing industrial near Main under $35/SF?` | agentic | Retrieve candidates, synthesize trade-offs, cite each recommendation. |
 | `Show sources for that answer.` | instant | Return evidence bundle from the previous query. |
 | `Why did you use 62k sq ft for Harbor Rd?` | instant | Explain freshness/authority, cite the correction and prior source if present. |
@@ -197,6 +217,6 @@ Use `uv run cre-cli replay-query <query-id>` after any answer or eval case to pr
 
 Use `uv run cre-cli demo-doctor --skip-public-callback` before recording to check corpus counts, local dependency health, ingestion quality, golden eval status, and Toolhouse configuration in one non-destructive pass. Drop `--skip-public-callback` when the public Cloudflare URL should also be verified.
 
-Use `uv run cre-cli demo-dry-run --live-toolhouse` for the final recording rehearsal. It executes the four-video-query sequence, validates replay checks for each answer, and optionally proves the live Toolhouse `Look deeper` path on the loading-access query.
+Use `uv run cre-cli demo-dry-run --live-toolhouse` for the final recording rehearsal. It executes the expanded video-query sequence, validates replay checks for each answer, and optionally proves the live Toolhouse `Look deeper` path on the loading-access query.
 
 Use `uv run cre-cli submission-report --format markdown --output .runtime/submission-report.md` for the final pre-submission artifact. It combines demo doctor, demo dry run, source secret scan, deliverable paths, and follow-up talking points.

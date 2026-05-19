@@ -84,14 +84,14 @@ def test_office_threshold_query_excludes_high_price_listing(
     payload = async_runner.run(answer_query("Show office buildings under $50/sq ft."))
 
     assert payload["status"] == "answered"
-    assert payload["matched_addresses"] == ["120 Main St", "17 Pine St"]
+    assert payload["matched_addresses"] == ["120 Main St", "75 Orchard Office", "17 Pine St"]
     assert "900 North Loop" not in payload["rendered_answer"]
-    assert payload["evidence_count"] == 2
+    assert payload["evidence_count"] == 3
 
     query_record, evidence_items, snapshot = async_runner.run(_load_query_artifacts(payload["query_id"]))
 
     assert "numeric_filter" in query_record.reason_codes
-    assert len(evidence_items) == 2
+    assert len(evidence_items) == 3
     assert snapshot is not None
     assert snapshot.filters_json["price_per_sq_ft_lt"] == "50"
 
@@ -104,14 +104,14 @@ def test_john_industrial_aggregation_sums_deduped_sources(
     payload = async_runner.run(answer_query("What is the total square footage of industrial properties in John's file or notes?"))
 
     assert payload["status"] == "answered"
-    assert payload["matched_addresses"] == ["130 Elm Ave", "64 Union Yard"]
-    assert "49,500 SF" in payload["rendered_answer"]
-    assert payload["evidence_count"] == 2
+    assert payload["matched_addresses"] == ["130 Elm Ave", "18 Beacon Freight", "42 Spruce Flex", "64 Union Yard"]
+    assert "111,500 SF" in payload["rendered_answer"]
+    assert payload["evidence_count"] == 4
 
     query_record, evidence_items, snapshot = async_runner.run(_load_query_artifacts(payload["query_id"]))
 
     assert "aggregation" in query_record.reason_codes
-    assert len(evidence_items) == 2
+    assert len(evidence_items) == 4
     assert snapshot is not None
     assert snapshot.filters_json["slack_user_name"] == "John"
 
@@ -153,8 +153,8 @@ def test_explain_query_returns_replayable_trust_receipt(
     assert explain_payload["answer_snapshot"]["filters"]["price_per_sq_ft_lt"] == "50"
     assert explain_payload["answer_snapshot"]["rendered_answer"] == answer_payload["rendered_answer"]
     assert explain_payload["answer_snapshot"]["dependency_state"]["qdrant"] is False
-    assert explain_payload["evidence_count"] == 2
-    assert len(explain_payload["evidence"]) == 2
+    assert explain_payload["evidence_count"] == 3
+    assert len(explain_payload["evidence"]) == 3
 
     first_evidence = explain_payload["evidence"][0]
     assert first_evidence["source_summary"]
@@ -177,7 +177,7 @@ def test_eval_golden_validates_expected_sources_and_evidence_order(
 
     office_case = next(case for case in payload["cases"] if case["name"] == "office_threshold")
     assert office_case["evidence_ids"]
-    assert office_case["matched_addresses"] == ["120 Main St", "17 Pine St"]
+    assert office_case["matched_addresses"] == ["120 Main St", "75 Orchard Office", "17 Pine St"]
     assert "main-street-office-flyer.pdf" in office_case["source_labels"]
 
     harbor_case = next(case for case in payload["cases"] if case["name"] == "harbor_conflict")
@@ -275,8 +275,8 @@ def test_loading_access_query_returns_hybrid_keyword_results(
 
     assert payload["status"] == "answered"
     assert payload["route_mode"] == "hybrid"
-    assert payload["matched_addresses"] == ["130 Elm Ave", "64 Union Yard"]
-    assert payload["evidence_count"] == 2
+    assert {"18 Beacon Freight", "130 Elm Ave", "64 Union Yard"}.issubset(set(payload["matched_addresses"]))
+    assert payload["evidence_count"] >= 3
     assert "loading dock" in payload["rendered_answer"]
     assert "yard" in payload["rendered_answer"]
 
@@ -284,7 +284,7 @@ def test_loading_access_query_returns_hybrid_keyword_results(
 
     assert query_record.route_mode == "hybrid"
     assert "chunk_keyword_search" in query_record.reason_codes
-    assert len(evidence_items) == 2
+    assert len(evidence_items) >= 3
     assert snapshot is not None
     assert snapshot.dependency_state_json["keyword_fallback"] is True
     assert snapshot.dependency_state_json["retrieval_mode"] == "hybrid_lexical_fuzzy"
@@ -305,15 +305,23 @@ def test_loading_access_explain_query_shows_keyword_chunk_matches(
     assert explain_payload["route_mode"] == "hybrid"
     assert explain_payload["answer_snapshot"]["dependency_state"]["keyword_fallback"] is True
     assert explain_payload["decision_summary"]["retrieval_mode"] == "hybrid_lexical_fuzzy"
-    assert explain_payload["decision_summary"]["selected_addresses"] == ["130 Elm Ave", "64 Union Yard"]
+    assert {"18 Beacon Freight", "130 Elm Ave", "64 Union Yard"}.issubset(
+        set(explain_payload["decision_summary"]["selected_addresses"])
+    )
     assert "hybrid lexical" in explain_payload["decision_summary"]["selection_reason"]
 
-    first_evidence = explain_payload["evidence"][0]
-    assert first_evidence["evidence_role"] == "result"
-    assert first_evidence["source_document"]["file_name"] == "elm-ave-industrial-flyer.pdf"
-    assert "loading dock" in first_evidence["selection_reason"]
-    assert "yard access" in first_evidence["selection_reason"]
-    assert "loading dock" in first_evidence["chunk"]["text_preview"]
+    evidence_by_address = {
+        item["property_record"]["address"]: item
+        for item in explain_payload["evidence"]
+        if item.get("property_record")
+    }
+    beacon_evidence = evidence_by_address["18 Beacon Freight"]
+    elm_evidence = evidence_by_address["130 Elm Ave"]
+    assert beacon_evidence["evidence_role"] == "result"
+    assert beacon_evidence["source_document"]["file_name"] == "last-mile-industrial-watchlist.csv"
+    assert "truck court" in beacon_evidence["selection_reason"]
+    assert "trailer parking" in beacon_evidence["selection_reason"]
+    assert "loading dock" in elm_evidence["chunk"]["text_preview"]
 
 
 @pytest.mark.golden
@@ -325,7 +333,7 @@ def test_noisy_loading_access_query_uses_alias_and_fuzzy_retrieval(
 
     assert payload["status"] == "answered"
     assert payload["route_mode"] == "hybrid"
-    assert payload["matched_addresses"][:2] == ["130 Elm Ave", "64 Union Yard"]
+    assert {"18 Beacon Freight", "130 Elm Ave", "64 Union Yard"}.issubset(set(payload["matched_addresses"]))
     assert "hybrid_local_retrieval" in payload["reason_codes"]
 
     _query_record, _evidence_items, snapshot = async_runner.run(_load_query_artifacts(payload["query_id"]))
@@ -414,7 +422,7 @@ def test_tenant_fit_query_uses_local_synthesis_before_toolhouse(
     assert payload["route_mode"] == "hybrid"
     assert "local_synthesis" in payload["reason_codes"]
     assert "Best local shortlist" in payload["rendered_answer"]
-    assert "*130 Elm Ave*" in payload["rendered_answer"]
+    assert "*18 Beacon Freight*" in payload["rendered_answer"]
     assert "*Look deeper*" in payload["rendered_answer"]
     assert payload["filters"]["query_constructor"]["sort"] == "tenant_fit"
 

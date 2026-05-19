@@ -202,6 +202,7 @@ async def _run_toolhouse_smoke(query_text: str) -> dict[str, object]:
     return {
         "status": deeper_payload.get("status"),
         "query_id": deeper_payload.get("query_id"),
+        "agent_run_id": deeper_payload.get("agent_run_id"),
         "instant_answer_status": answer_payload.get("status"),
         "toolhouse_agent_id": deeper_payload.get("toolhouse_agent_id"),
         "toolhouse_run_id": deeper_payload.get("toolhouse_run_id"),

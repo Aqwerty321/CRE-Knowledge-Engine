@@ -40,6 +40,18 @@ KNOWN_ADDRESS_ALIASES: dict[str, str] = {
     "canal works": "310 canal works",
     "64 union": "64 union yard",
     "union yard": "64 union yard",
+    "18 beacon": "18 beacon freight",
+    "beacon freight": "18 beacon freight",
+    "42 spruce": "42 spruce flex",
+    "spruce flex": "42 spruce flex",
+    "510 river": "510 river cold storage",
+    "river cold storage": "510 river cold storage",
+    "75 orchard": "75 orchard office",
+    "orchard office": "75 orchard office",
+    "22 gallery": "22 gallery row",
+    "gallery row": "22 gallery row",
+    "600 skyline": "600 skyline office",
+    "skyline office": "600 skyline office",
 }
 
 KNOWN_MARKETS = {
@@ -235,6 +247,10 @@ def _extract_keywords(normalized: str) -> list[str]:
         "market snapshot": "market snapshot",
         "tenant": "tenant",
         "sublease": "sublease",
+        "truck court": "truck court",
+        "cold storage": "cold storage",
+        "grade-level": "grade-level door",
+        "grade level": "grade-level door",
     }
     return sorted({term for marker, term in keyword_map.items() if marker in normalized})
 
@@ -325,7 +341,11 @@ def build_structured_query_spec(query_text: str) -> StructuredQuerySpec | None:
     if subjective or tenant_profile:
         if tenant_profile == "logistics" and "industrial" not in property_types:
             property_types = [*property_types, "industrial"]
-        tenant_keywords = sorted(set([*keywords, "loading dock", "yard", "logistics"])) if tenant_profile else keywords
+        tenant_keywords = (
+            sorted(set([*keywords, "loading dock", "dock doors", "yard", "truck court", "trailer parking", "logistics"]))
+            if tenant_profile
+            else keywords
+        )
         return StructuredQuerySpec(
             intent="tenant_fit",
             route_mode="hybrid",

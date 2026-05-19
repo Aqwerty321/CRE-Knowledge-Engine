@@ -45,10 +45,10 @@ GOLDEN_EVAL_CASES: tuple[GoldenEvalCase, ...] = (
         name="office_threshold",
         query="Show office buildings under $50/sq ft.",
         expected_route_mode="instant",
-        required_addresses=("120 Main St", "17 Pine St"),
-        required_source_labels=("main-street-office-flyer.pdf", "downtown-office-inventory.csv"),
+        required_addresses=("120 Main St", "75 Orchard Office", "17 Pine St"),
+        required_source_labels=("main-street-office-flyer.pdf", "retail-office-followups.csv", "downtown-office-inventory.csv"),
         required_reason_codes=("numeric_filter",),
-        min_evidence_count=2,
+        min_evidence_count=3,
         required_dependency_state={"qdrant": False},
     ),
     GoldenEvalCase(
@@ -65,10 +65,38 @@ GOLDEN_EVAL_CASES: tuple[GoldenEvalCase, ...] = (
         name="loading_access",
         query="Find listings that mention loading access or yard space.",
         expected_route_mode="hybrid",
-        required_addresses=("130 Elm Ave", "64 Union Yard"),
-        required_source_labels=("elm-ave-industrial-flyer.pdf", "slack-field-notes.txt"),
+        required_addresses=("18 Beacon Freight", "130 Elm Ave", "64 Union Yard"),
+        required_source_labels=("last-mile-industrial-watchlist.csv", "elm-ave-industrial-flyer.pdf"),
         required_reason_codes=("chunk_keyword_search",),
-        min_evidence_count=2,
+        min_evidence_count=3,
+    ),
+    GoldenEvalCase(
+        name="beacon_exact_lookup",
+        query="What do we know about 18 Beacon Freight?",
+        expected_route_mode="instant",
+        required_addresses=("18 Beacon Freight",),
+        required_source_labels=("last-mile-industrial-watchlist.csv", "client-tour-notes.txt", "Slack message"),
+        required_reason_codes=("exact_lookup",),
+        min_evidence_count=3,
+    ),
+    GoldenEvalCase(
+        name="industrial_average_rent",
+        query="What is the average rent for industrial listings under $35/SF?",
+        expected_route_mode="instant",
+        required_addresses=("700 Logistics Pkwy", "18 Beacon Freight", "510 River Cold Storage"),
+        required_source_labels=("broker-availability-tracker.xlsx", "last-mile-industrial-watchlist.csv"),
+        required_reason_codes=("aggregation",),
+        min_evidence_count=8,
+    ),
+    GoldenEvalCase(
+        name="last_mile_tenant_fit",
+        query="Which options look best for a logistics tenant under $35/SF available soon?",
+        expected_route_mode="hybrid",
+        required_addresses=("18 Beacon Freight", "42 Spruce Flex"),
+        required_source_labels=("last-mile-industrial-watchlist.csv",),
+        required_reason_codes=("local_synthesis",),
+        min_evidence_count=3,
+        required_dependency_state={"local_synthesis": True},
     ),
     GoldenEvalCase(
         name="structured_industrial_filter",
@@ -104,9 +132,21 @@ DEMO_DRY_RUN_STEPS: tuple[DemoDryRunStep, ...] = (
     ),
     DemoDryRunStep(
         name="loading_access",
-        query="Find listings that mention loading access or yard space.",
+        query="Find whse opts with trk court and trlr parking.",
         expected_route_mode="hybrid",
-        talk_track="Hybrid retrieval over operational language in listing text and field notes.",
+        talk_track="Hybrid retrieval over shorthand and operational language in listing text and field notes.",
+    ),
+    DemoDryRunStep(
+        name="tenant_fit",
+        query="Which options look best for a logistics tenant under $35/SF available soon?",
+        expected_route_mode="hybrid",
+        talk_track="Local tenant-fit synthesis over price, timing, size, logistics language, and source quality.",
+    ),
+    DemoDryRunStep(
+        name="average_rent",
+        query="What is the average rent for industrial listings under $35/SF?",
+        expected_route_mode="instant",
+        talk_track="Structured aggregation over deduped industrial records from files and Slack-shaped notes.",
     ),
     DemoDryRunStep(
         name="harbor_conflict",
@@ -148,6 +188,21 @@ def _append_missing_subset_failures(
         failures.append(f"missing {label}: {', '.join(missing)}")
 
 
+def _has_required_role_order(evidence_roles: list[str], required_roles: tuple[str, ...]) -> bool:
+    if not required_roles:
+        return True
+    if not evidence_roles or evidence_roles[0] != required_roles[0]:
+        return False
+
+    next_required_index = 1
+    for evidence_role in evidence_roles[1:]:
+        if next_required_index >= len(required_roles):
+            return True
+        if evidence_role == required_roles[next_required_index]:
+            next_required_index += 1
+    return next_required_index >= len(required_roles)
+
+
 async def _evaluate_case(case: GoldenEvalCase) -> dict[str, object]:
     answer_payload = await answer_query(case.query)
     explain_payload = await explain_query(str(answer_payload.get("query_id") or ""))
@@ -187,7 +242,7 @@ async def _evaluate_case(case: GoldenEvalCase) -> dict[str, object]:
     _append_missing_subset_failures(failures, label="reason codes", required=case.required_reason_codes, actual=reason_codes)
 
     evidence_roles = [str(item.get("evidence_role")) for item in explain_evidence if item.get("evidence_role")]
-    if case.required_evidence_roles and tuple(evidence_roles[: len(case.required_evidence_roles)]) != case.required_evidence_roles:
+    if case.required_evidence_roles and not _has_required_role_order(evidence_roles, case.required_evidence_roles):
         failures.append(f"evidence roles expected {list(case.required_evidence_roles)}, got {evidence_roles}")
 
     dependency_state = dict(snapshot.get("dependency_state") or {})

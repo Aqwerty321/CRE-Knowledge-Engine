@@ -95,6 +95,7 @@ def test_import_sample_dataset_updates_existing_source_without_duplication(
 ) -> None:
     manifest = load_sample_manifest(Path("sample-data"))
     main_source = next(source for source in manifest.sources if source.source_id == "F1")
+    expected_source_count = len(manifest.sources)
     updated_source = main_source.model_copy(
         update={
             "slack_file_id": "F_LIVE_MAIN",
@@ -116,8 +117,8 @@ def test_import_sample_dataset_updates_existing_source_without_duplication(
     source_document = async_runner.run(_load_main_source())
 
     assert result["status"] == "imported"
-    assert counts_before["source_documents"] == 14
-    assert counts_after["source_documents"] == 14
+    assert counts_before["source_documents"] == expected_source_count
+    assert counts_after["source_documents"] == expected_source_count
     assert source_document is not None
     assert source_document.slack_team_id == "T_LIVE_DEMO"
     assert source_document.slack_channel_name == "cre-listings"
@@ -163,8 +164,7 @@ def test_live_slack_messages_with_same_text_keep_distinct_source_documents(
     )
 
     assert result["status"] == "imported"
-    assert counts_before["source_documents"] == 14
-    assert counts_after["source_documents"] == 16
+    assert counts_after["source_documents"] == counts_before["source_documents"] + 2
     assert len(live_sources) == 2
     assert [source.slack_ts for source in live_sources] == ["1778997000.000100", "1778997060.000100"]
     assert all(source.source_url for source in live_sources)

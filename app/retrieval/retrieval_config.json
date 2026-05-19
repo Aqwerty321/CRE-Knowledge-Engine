@@ -9,7 +9,14 @@
       "yard access",
       "shared yard",
       "usable yard",
-      "trailer storage"
+      "trailer storage",
+      "truck court",
+      "trailer parking",
+      "trailer staging",
+      "grade-level door",
+      "grade level door",
+      "dock high",
+      "cross dock"
     ]
   },
   "aliases": {
@@ -19,7 +26,15 @@
     "loading": ["loading access", "loading dock"],
     "yard": ["yard space", "yard access", "shared yard", "usable yard"],
     "truck court": ["yard space", "trailer storage", "trailer parking"],
+    "trk court": ["truck court", "yard space", "trailer parking"],
     "trailer parking": ["trailer storage", "yard access"],
+    "trlr parking": ["trailer parking", "trailer storage", "yard access"],
+    "trailer staging": ["trailer parking", "trailer storage", "yard access"],
+    "staging": ["trailer staging", "yard space"],
+    "grade level": ["grade-level door", "loading access"],
+    "grade-level": ["grade-level door", "loading access"],
+    "dock high": ["dock door", "loading dock"],
+    "cross dock": ["dock door", "loading dock", "loading access"],
     "outdoor storage": ["yard space", "trailer storage"],
     "whse": ["warehouse", "industrial", "logistics"],
     "warehouse": ["industrial", "logistics", "distribution"],

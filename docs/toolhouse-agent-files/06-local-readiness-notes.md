@@ -84,11 +84,11 @@ Rules:
 
 Latest known audit state:
 
-- 14 source documents.
-- 14 structured property records.
+- 23 source documents.
+- 25 structured property records.
 - 0 sources without chunks.
 - 3 sources with text but no extracted property rows.
-- 0 missing source URLs on property-backed records after live Slack sync.
+- 6 local Slack-shaped message rows without source URLs before live permalink overlay.
 - 1 explainable Harbor Rd conflict group.
 - `toolhouse_readiness.status = ready_for_bounded_agent`.
 
@@ -130,7 +130,7 @@ uv run pytest -q
 
 Current result: tests pass with no known failures or warning noise.
 
-Latest full-suite count: 81 tests passing.
+Latest full-suite count: 97 tests passing.
 
 Latest live Toolhouse smoke:
 

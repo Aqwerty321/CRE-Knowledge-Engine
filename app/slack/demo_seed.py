@@ -75,6 +75,30 @@ def build_default_persona_seed_plan() -> list[PersonaSeed]:
             text="Tenant wants industrial near Main with loading access, ideally under $35/SF and available soon.",
         ),
         PersonaSeed(
+            seed_key="listings_beacon_watchlist",
+            channel_name="cre-listings",
+            persona_key="sarah",
+            text="Added the last-mile watchlist: 18 Beacon Freight is immediate, 36k SF at $26/SF with two dock doors and a real truck court.",
+        ),
+        PersonaSeed(
+            seed_key="listings_spruce_tour_note",
+            channel_name="cre-listings",
+            persona_key="john",
+            text="Tour note: 42 Spruce Flex is under budget and has a small shared yard, but ceiling height is only 20 ft.",
+        ),
+        PersonaSeed(
+            seed_key="listings_logistics_preference",
+            channel_name="cre-listings",
+            persona_key="maya",
+            text="Tenant asked specifically for truck court depth and trailer parking. Beacon and Union Yard are the best in-person fits so far.",
+        ),
+        PersonaSeed(
+            seed_key="listings_river_cold_storage",
+            channel_name="cre-listings",
+            persona_key="priya",
+            text="Cold storage at 510 River is real, but availability slipped to September. Good economics, weaker for the near-term logistics brief.",
+        ),
+        PersonaSeed(
             seed_key="market_context",
             channel_name="cre-market-research",
             persona_key="maya",
@@ -85,6 +109,12 @@ def build_default_persona_seed_plan() -> list[PersonaSeed]:
             channel_name="cre-market-research",
             persona_key="priya",
             text="Tenant requirements summary is attached here for recommendation and look-deeper testing.",
+        ),
+        PersonaSeed(
+            seed_key="market_expansion_brief",
+            channel_name="cre-market-research",
+            persona_key="maya",
+            text="Added the tenant expansion brief so the recommendation path has budget, timing, truck-court, and district preferences in one place.",
         ),
         PersonaSeed(
             seed_key="private_harbor_note",
@@ -99,7 +129,7 @@ def build_default_persona_seed_plan() -> list[PersonaSeed]:
         PersonaSeed(
             seed_key="agent_qa_seed",
             channel_name="cre-agent-qa",
-            text='QA seed: try queries like "What properties do we have available near 123 Main Street?", "Find listings that mention loading access or yard space.", and "Why did you use 62k sq ft for Harbor Rd?" once ingestion is wired live.',
+            text='QA seed: try queries like "What properties do we have available near 123 Main Street?", "Find whse opts with trk court and trlr parking.", "Which options look best for a logistics tenant under $35/SF available soon?", and "Why did you use 62k sq ft for Harbor Rd?" once ingestion is wired live.',
         ),
         PersonaSeed(
             seed_key="listings_harbor_reply",

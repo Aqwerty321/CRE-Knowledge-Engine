@@ -22,12 +22,18 @@ def build_default_file_seed_plan() -> list[SlackFileSeed]:
         SlackFileSeed("cre-listings", "industrial-availability.csv", "Industrial Availability"),
         SlackFileSeed("cre-listings", "slack-field-notes.txt", "Slack Field Notes"),
         SlackFileSeed("cre-listings", "source-corrections.csv", "Source Corrections"),
+        SlackFileSeed("cre-listings", "last-mile-industrial-watchlist.csv", "Last-Mile Industrial Watchlist"),
+        SlackFileSeed("cre-listings", "client-tour-notes.txt", "Client Tour Notes"),
+        SlackFileSeed("cre-listings", "access-constraints-notes.txt", "Access Constraints Notes"),
+        SlackFileSeed("cre-listings", "retail-office-followups.csv", "Retail And Office Follow-Ups"),
         SlackFileSeed("cre-market-research", "q2-metro-market-snapshot.pdf", "Q2 Metro Market Snapshot"),
         SlackFileSeed("cre-market-research", "market-street-retail-brief.pdf", "Market Street Retail Brief"),
         SlackFileSeed("cre-market-research", "tenant-requirements-summary.txt", "Tenant Requirements Summary"),
+        SlackFileSeed("cre-market-research", "tenant-expansion-brief.txt", "Tenant Expansion Brief"),
         SlackFileSeed("cre-market-research", "broker-availability-tracker.xlsx", "Broker Availability Tracker"),
         SlackFileSeed("cre-private-demo", "source-corrections.csv", "Source Corrections"),
         SlackFileSeed("cre-private-demo", "broker-availability-tracker.xlsx", "Broker Availability Tracker"),
+        SlackFileSeed("cre-private-demo", "access-constraints-notes.txt", "Access Constraints Notes"),
     ]
 
 

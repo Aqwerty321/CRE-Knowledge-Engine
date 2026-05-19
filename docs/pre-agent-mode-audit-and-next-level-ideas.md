@@ -48,10 +48,10 @@ Implemented and validated:
 
 Current database status from `uv run cre-cli status`:
 
-- 14 source documents;
-- 14 chunks;
-- 14 property records;
-- 56 property field values;
+- 23 source documents;
+- 23 chunks;
+- 25 property records;
+- 225 property field values;
 - database reachable;
 - configured Slack channel IDs present.
 
@@ -91,7 +91,7 @@ uv run pytest -q
 
 Result:
 
-- 81 tests pass after the Slack UX hardening, trust-receipt/table support, live Toolhouse smoke slice, native parser fixtures, Slack ingestion pass, source-post provenance, agent-run persistence, golden eval harness, query replay pass, demo dry run, secret scan, and submission report pass;
+- 97 tests pass after the Slack UX hardening, source-receipt/table support, live Toolhouse smoke slice, native parser fixtures, Slack ingestion pass, source-post receipt trail, agent-run persistence, golden eval harness, query replay pass, demo dry run, secret scan, expanded corpus battery, and submission report pass;
 - no known failures or warning noise remain.
 
 Post-hardening additions:

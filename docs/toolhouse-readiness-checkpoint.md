@@ -60,11 +60,11 @@ uv run cre-cli audit-data
 
 Current live-synced audit result:
 
-- 14 source documents;
-- 14 structured property records;
+- 23 source documents;
+- 25 structured property records;
 - 0 sources without chunks;
-- 3 sources with text but no extracted property rows;
-- 0 missing source URLs on property-backed records after live Slack sync;
+- 6 sources with text but no extracted property rows;
+- 6 local Slack-shaped message rows without source URLs before live permalink overlay;
 - 1 explainable conflict group for Harbor Rd;
 - `toolhouse_readiness.status = ready_for_bounded_agent`.
 

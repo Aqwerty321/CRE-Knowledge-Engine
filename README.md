@@ -745,7 +745,9 @@ A broker can ask:
 | --- | --- |
 | `What properties do we have available near 123 Main Street?` | Proximity search over normalized property records with sourced nearby results. |
 | `Show office buildings under $50/sq ft.` | Exact structured filtering that excludes higher-priced office inventory. |
-| `Find listings that mention loading access or yard space.` | Hybrid retrieval over source text and field notes, with BM25S, PolyFuzz, TF-IDF, and optional Qdrant/rerank support. |
+| `What is the average rent for industrial listings under $35/SF?` | Structured aggregation over deduped industrial records from files and Slack-shaped notes. |
+| `Find whse opts with trk court and trlr parking.` | Hybrid retrieval over noisy operational language, with BM25S, PolyFuzz, TF-IDF, and optional Qdrant/rerank support. |
+| `Which options look best for a logistics tenant under $35/SF available soon?` | Local tenant-fit synthesis over price, size, timing, source quality, and logistics language before Toolhouse review. |
 | `Why did you use 62k sq ft for Harbor Rd?` | Freshness and authority conflict handling with selected, supporting, and superseded evidence. |
 | `Look deeper` | Toolhouse review over the allowed evidence bundle, with backend citation validation. |
 

@@ -397,8 +397,8 @@ Output:
 {
   "tool": "audit_data",
   "status": "ok",
-  "source_document_count": 14,
-  "property_record_count": 14,
+  "source_document_count": 23,
+  "property_record_count": 25,
   "sources_without_chunks": [],
   "sources_without_properties": [],
   "missing_field_counts": {},

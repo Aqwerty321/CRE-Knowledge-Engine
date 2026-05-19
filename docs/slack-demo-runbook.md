@@ -140,7 +140,7 @@ What this channel proves:
 
 Use this seeded setup message:
 
-- `QA seed: try queries like "What properties do we have available near 123 Main Street?", "Find listings that mention loading access or yard space.", and "Why did you use 62k sq ft for Harbor Rd?" once ingestion is wired live.`
+- `QA seed: try queries like "What properties do we have available near 123 Main Street?", "Find whse opts with trk court and trlr parking.", "Which options look best for a logistics tenant under $35/SF available soon?", and "Why did you use 62k sq ft for Harbor Rd?" once ingestion is wired live.`
 
 Then keep the channel mostly clean for the live demo questions.
 
@@ -169,7 +169,7 @@ For any answer you want to inspect or show outside Slack, copy the returned `que
 uv run cre-cli replay-query <query-id>
 ```
 
-That replay payload is the demo trust receipt: route decision, reason codes, filters, evidence IDs, source summaries, dependency state, rendered answer, and saved Toolhouse/local agent traces when present. The submission report is a concise artifact you can keep open while recording or use as the final pre-push checklist.
+That replay payload is the demo source receipt: route decision, reason codes, filters, evidence IDs, source summaries, dependency state, rendered answer, and saved Toolhouse/local agent traces when present. The submission report is a concise artifact you can keep open while recording or use as the final pre-push checklist.
 
 ### Phase 1: Set Context
 
@@ -184,6 +184,8 @@ Show:
 - Sarah's listing message;
 - John's field note;
 - Priya's Harbor correction;
+- Sarah's 18 Beacon Freight watchlist note;
+- John's 42 Spruce Flex tour note;
 - the Harbor thread reply.
 
 ### Phase 2: Show The Agent Channel
@@ -218,19 +220,43 @@ What to emphasize:
 - exclusion of the wrong office candidate;
 - source-grounded output.
 
-### Phase 5: Run The Hybrid Query
+### Phase 5: Run The Aggregation Query
 
 Ask:
 
-- `Find listings that mention loading access or yard space.`
+- `What is the average rent for industrial listings under $35/SF?`
+
+What to emphasize:
+
+- deduped aggregation over the larger industrial set;
+- evidence comes from multiple source types;
+- the answer can be replayed from the saved snapshot.
+
+### Phase 6: Run The Noisy Hybrid Query
+
+Ask:
+
+- `Find whse opts with trk court and trlr parking.`
 
 What to emphasize:
 
 - the answer combines formal listing material and informal notes;
-- terms like `loading access` are not simple structured fields;
+- shorthand like `whse`, `trk`, and `trlr` is normalized through local retrieval;
 - this is where hybrid retrieval matters.
 
-### Phase 6: Run The Conflict Query
+### Phase 7: Run The Tenant-Fit Query
+
+Ask:
+
+- `Which options look best for a logistics tenant under $35/SF available soon?`
+
+What to emphasize:
+
+- local synthesis happens before Toolhouse;
+- the candidate set is still source-bounded;
+- `Look deeper` is an escalation over the selected evidence bundle.
+
+### Phase 8: Run The Conflict Query
 
 Ask:
 
@@ -290,7 +316,7 @@ Use this if you want a concise, repeatable script.
 
 ### When Showing `Show sources`
 
-`This is the trust loop. Every factual answer should be inspectable, not just plausible.`
+`This is the source loop. Every factual answer should be inspectable, not just plausible.`
 
 ### When Showing A Conflict Answer
 
@@ -302,7 +328,7 @@ Use this if you want a concise, repeatable script.
 
 ### Closing
 
-`For this take-home, the important thing is that the system can ingest workspace knowledge, preserve provenance, answer in Slack, and explain where the answer came from.`
+`For this take-home, the important thing is that the system can ingest workspace knowledge, preserve source receipts, answer in Slack, and explain where the answer came from.`
 
 ## Honesty Guardrails For The Demo
 
@@ -324,9 +350,10 @@ Use this compressed version:
 
 1. Show `#cre-listings` with the Harbor correction.
 2. Ask `What properties do we have available near 123 Main Street?`
-3. Ask `Find listings that mention loading access or yard space.`
-4. Ask `Why did you use 62k sq ft for Harbor Rd?`
-5. Trigger `Show sources`.
+3. Ask `Find whse opts with trk court and trlr parking.`
+4. Ask `Which options look best for a logistics tenant under $35/SF available soon?`
+5. Ask `Why did you use 62k sq ft for Harbor Rd?`
+6. Trigger `Show sources`.
 
 That is enough to prove:
 
