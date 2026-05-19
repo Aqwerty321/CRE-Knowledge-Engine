@@ -287,7 +287,9 @@ def test_loading_access_query_returns_hybrid_keyword_results(
     assert len(evidence_items) == 2
     assert snapshot is not None
     assert snapshot.dependency_state_json["keyword_fallback"] is True
-    assert snapshot.dependency_state_json["retrieval_mode"] == "keyword_chunk_search"
+    assert snapshot.dependency_state_json["retrieval_mode"] == "hybrid_lexical_fuzzy"
+    assert "bm25" in snapshot.dependency_state_json["retrieval_contributors"]
+    assert "rapidfuzz" in snapshot.dependency_state_json["retrieval_layers"]
 
 
 @pytest.mark.golden
@@ -302,9 +304,9 @@ def test_loading_access_explain_query_shows_keyword_chunk_matches(
     assert explain_payload["status"] == "explained"
     assert explain_payload["route_mode"] == "hybrid"
     assert explain_payload["answer_snapshot"]["dependency_state"]["keyword_fallback"] is True
-    assert explain_payload["decision_summary"]["retrieval_mode"] == "keyword_chunk_search"
+    assert explain_payload["decision_summary"]["retrieval_mode"] == "hybrid_lexical_fuzzy"
     assert explain_payload["decision_summary"]["selected_addresses"] == ["130 Elm Ave", "64 Union Yard"]
-    assert "loading access or yard space" in explain_payload["decision_summary"]["selection_reason"]
+    assert "hybrid lexical" in explain_payload["decision_summary"]["selection_reason"]
 
     first_evidence = explain_payload["evidence"][0]
     assert first_evidence["evidence_role"] == "result"
@@ -312,6 +314,27 @@ def test_loading_access_explain_query_shows_keyword_chunk_matches(
     assert "loading dock" in first_evidence["selection_reason"]
     assert "yard access" in first_evidence["selection_reason"]
     assert "loading dock" in first_evidence["chunk"]["text_preview"]
+
+
+@pytest.mark.golden
+def test_noisy_loading_access_query_uses_alias_and_fuzzy_retrieval(
+    prepared_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = async_runner.run(answer_query("Find whse options with dock doors or truck court."))
+
+    assert payload["status"] == "answered"
+    assert payload["route_mode"] == "hybrid"
+    assert payload["matched_addresses"][:2] == ["130 Elm Ave", "64 Union Yard"]
+    assert "hybrid_local_retrieval" in payload["reason_codes"]
+
+    _query_record, _evidence_items, snapshot = async_runner.run(_load_query_artifacts(payload["query_id"]))
+
+    assert snapshot is not None
+    assert snapshot.dependency_state_json["retrieval_mode"] == "hybrid_lexical_fuzzy"
+    assert "dock doors" in snapshot.filters_json["expanded_terms"]
+    assert "trailer parking" in snapshot.dependency_state_json["query_expansion_terms"]
+    assert set(snapshot.dependency_state_json["retrieval_contributors"]) & {"bm25", "rapidfuzz", "tfidf_char"}
 
 
 @pytest.mark.golden

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from uuid import UUID
 
@@ -34,6 +34,7 @@ class RetrievedEvidence:
     source_summary: str
     distance_km: float | None = None
     selection_reason: str | None = None
+    retrieval_metadata: dict[str, object] = field(default_factory=dict)
 
 
 def _distance_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -205,19 +206,33 @@ def _dependency_state_for_plan(plan: QueryPlan) -> dict[str, object]:
 
 def _dependency_state_for_result(plan: QueryPlan, items: list[RetrievedEvidence]) -> dict[str, object]:
     dependency_state = _dependency_state_for_plan(plan)
-    if plan.query_type == "loading_access_search" and any(
-        (item.selection_reason or "").startswith("qdrant") for item in items
-    ):
-        dependency_state["qdrant"] = True
-        dependency_state["rerank"] = any("reranker" in (item.selection_reason or "") for item in items)
-        dependency_state["retrieval_mode"] = "qdrant_vector_rerank"
+    if plan.query_type == "loading_access_search" and items:
+        layer_status: dict[str, str] = {}
+        contributors: set[str] = set()
+        expansion_terms: list[str] = []
+        for item in items:
+            metadata = item.retrieval_metadata
+            layer_status.update({str(key): str(value) for key, value in dict(metadata.get("layer_status") or {}).items()})
+            contributors.update(str(value) for value in list(metadata.get("retrieval_contributors") or []))
+            if not expansion_terms:
+                expansion_terms = [str(value) for value in list(metadata.get("query_expansion_terms") or [])]
+
+        dependency_state["keyword_fallback"] = True
+        dependency_state["retrieval_mode"] = (
+            "hybrid_lexical_fuzzy_vector" if "qdrant_vector" in contributors else "hybrid_lexical_fuzzy"
+        )
+        dependency_state["retrieval_layers"] = layer_status
+        dependency_state["retrieval_contributors"] = sorted(contributors)
+        dependency_state["query_expansion_terms"] = expansion_terms[:12]
+        dependency_state["qdrant"] = "qdrant_vector" in contributors
+        dependency_state["rerank"] = "rerank" in contributors or layer_status.get("rerank") == "ok"
     return dependency_state
 
 
 def _model_versions_for_plan(plan: QueryPlan) -> dict[str, object]:
     if plan.query_type.startswith("generic_"):
         return {"answering": "heuristic-v2", "query_constructor": "structured-v1"}
-    return {"answering": "hybrid-v1" if plan.route_mode == "hybrid" else "instant-v1"}
+    return {"answering": "hybrid-v2" if plan.route_mode == "hybrid" else "instant-v1"}
 
 
 def _query_constructor_filters_for_plan(plan: QueryPlan) -> dict[str, object] | None:
@@ -272,6 +287,7 @@ def _build_evidence_item(
     matched_fields: list[str],
     distance_km: float | None = None,
     selection_reason: str | None = None,
+    retrieval_metadata: dict[str, object] | None = None,
 ) -> RetrievedEvidence:
     return RetrievedEvidence(
         property_record=property_record,
@@ -282,6 +298,7 @@ def _build_evidence_item(
         source_summary=_build_source_summary(property_record, source_document, chunk),
         distance_km=distance_km,
         selection_reason=selection_reason,
+        retrieval_metadata=retrieval_metadata or {},
     )
 
 
@@ -373,6 +390,7 @@ def _hybrid_match_to_evidence(match: HybridChunkMatch) -> RetrievedEvidence:
         relevance_score=match.relevance_score,
         matched_fields=match.matched_terms,
         selection_reason=match.selection_reason,
+        retrieval_metadata=match.retrieval_metadata,
     )
 
 
@@ -391,6 +409,8 @@ async def _retrieve_loading_access_search(session: AsyncSession, plan: QueryPlan
         session,
         property_type=str(plan.filters["property_type"]),
         expanded_terms=list(plan.filters["expanded_terms"]),
+        query_text=str(plan.filters.get("query_text") or ""),
+        concept=str(plan.filters.get("concept") or "loading_access_or_yard_space"),
     )
     return [_hybrid_match_to_evidence(match) for match in matches]
 
@@ -1063,27 +1083,27 @@ async def explain_query(query_id: str) -> dict[str, object]:
         decision_summary: dict[str, object] | None = None
         if plan.query_type == "loading_access_search" and evidence_bundle:
             matched_addresses: list[str] = []
+            contributors = list(dependency_state.get("retrieval_contributors") or [])
+            contributor_label = ", ".join(map(str, contributors)) if contributors else "local retrieval"
             for item in evidence_bundle:
                 property_record = item["property_record"]
                 matched_terms = list(item["matched_fields"])
                 item["evidence_role"] = "result"
-                if dependency_state.get("retrieval_mode") == "qdrant_vector_rerank":
-                    item["selection_reason"] = "qdrant vector search plus local reranker selected this chunk"
-                else:
-                    item["selection_reason"] = (
-                        f"keyword fallback matched: {', '.join(matched_terms)}" if matched_terms else "keyword fallback match"
-                    )
+                item["selection_reason"] = (
+                    f"hybrid lexical/fuzzy retrieval matched: {', '.join(matched_terms)} via {contributor_label}"
+                    if matched_terms
+                    else f"hybrid lexical/fuzzy retrieval via {contributor_label}"
+                )
                 if property_record is not None and property_record.get("address") is not None:
                     matched_addresses.append(str(property_record["address"]))
 
             decision_summary = {
                 "selected_addresses": matched_addresses,
-                "selection_reason": (
-                    "Qdrant vector search plus local reranker over indexed source chunks"
-                    if dependency_state.get("retrieval_mode") == "qdrant_vector_rerank"
-                    else "keyword chunk matches for loading access or yard space"
-                ),
+                "selection_reason": "hybrid lexical, fuzzy, alias, and optional vector retrieval over indexed source chunks",
                 "retrieval_mode": dependency_state.get("retrieval_mode"),
+                "retrieval_layers": dependency_state.get("retrieval_layers"),
+                "retrieval_contributors": dependency_state.get("retrieval_contributors"),
+                "query_expansion_terms": dependency_state.get("query_expansion_terms"),
             }
 
         if plan.query_type in {"harbor_change_review", "harbor_conflict_why"} and evidence_bundle:

@@ -3,6 +3,7 @@ from app.indexing.vector_service import (
 	check_vector_dependencies,
 	index_all_chunks,
 	index_chunks_by_ids,
+	rerank_documents,
 	search_vector_chunks,
 )
 
@@ -11,5 +12,6 @@ __all__ = [
 	"check_vector_dependencies",
 	"index_all_chunks",
 	"index_chunks_by_ids",
+	"rerank_documents",
 	"search_vector_chunks",
 ]

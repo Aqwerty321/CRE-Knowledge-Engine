@@ -1,0 +1,52 @@
+{
+  "concepts": {
+    "loading_access_or_yard_space": [
+      "loading access",
+      "yard space",
+      "loading dock",
+      "dock door",
+      "dock doors",
+      "yard access",
+      "shared yard",
+      "usable yard",
+      "trailer storage"
+    ]
+  },
+  "aliases": {
+    "dock": ["loading dock", "dock door", "dock doors", "loading access"],
+    "dock doors": ["loading dock", "loading access"],
+    "ld": ["loading dock", "loading access"],
+    "loading": ["loading access", "loading dock"],
+    "yard": ["yard space", "yard access", "shared yard", "usable yard"],
+    "truck court": ["yard space", "trailer storage", "trailer parking"],
+    "trailer parking": ["trailer storage", "yard access"],
+    "outdoor storage": ["yard space", "trailer storage"],
+    "whse": ["warehouse", "industrial", "logistics"],
+    "warehouse": ["industrial", "logistics", "distribution"],
+    "logistics": ["industrial", "distribution", "warehouse"],
+    "psf": ["per sf", "$/sf", "price per square foot"],
+    "sf": ["sq ft", "square feet", "square footage"]
+  },
+  "weights": {
+    "bm25": 1.0,
+    "substring": 0.55,
+    "rapidfuzz": 0.85,
+    "tfidf_char": 0.75,
+    "qdrant_vector": 1.1,
+    "rerank": 1.2
+  },
+  "enabled_retrievers": {
+    "bm25": true,
+    "substring": true,
+    "rapidfuzz": true,
+    "tfidf_char": true,
+    "qdrant_vector": true,
+    "rerank": true
+  },
+  "rrf_k": 60,
+  "limit": 10,
+  "candidate_limit": 30,
+  "fuzzy_min_score": 0.55,
+  "tfidf_min_score": 0.04,
+  "rerank_blend_weight": 0.25
+}

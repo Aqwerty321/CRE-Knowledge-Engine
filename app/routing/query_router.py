@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass
 from decimal import Decimal
 
+from app.retrieval.alias_expansion import AliasExpander
+from app.retrieval.retrieval_config import load_hybrid_retrieval_config
 from app.routing.query_constructor import build_structured_query_spec
 
 DEMO_ANCHORS: dict[str, tuple[float, float]] = {
@@ -11,15 +13,7 @@ DEMO_ANCHORS: dict[str, tuple[float, float]] = {
     "123 main st": (40.7505, -73.9970),
 }
 
-LOADING_ACCESS_EXPANDED_TERMS = [
-    "loading access",
-    "yard space",
-    "loading dock",
-    "yard access",
-    "shared yard",
-    "usable yard",
-    "trailer storage",
-]
+LOADING_ACCESS_CONCEPT = "loading_access_or_yard_space"
 
 SUPPORTED_QUERY_HINTS = [
     "near 123 Main Street",
@@ -55,6 +49,15 @@ def _normalize_address(address: str) -> str:
 def _extract_currency_threshold(query_text: str) -> Decimal | None:
     match = re.search(r"under\s+\$?(\d+(?:\.\d+)?)", query_text)
     return Decimal(match.group(1)) if match else None
+
+
+def _loading_access_expanded_terms() -> list[str]:
+    return list(load_hybrid_retrieval_config().concept_terms(LOADING_ACCESS_CONCEPT))
+
+
+def _matches_loading_access_concept(query_text: str) -> bool:
+    config = load_hybrid_retrieval_config()
+    return AliasExpander(config).matches_concept(query_text, LOADING_ACCESS_CONCEPT)
 
 
 def build_query_plan(query_text: str) -> QueryPlan:
@@ -150,17 +153,18 @@ def build_query_plan(query_text: str) -> QueryPlan:
             },
         )
 
-    if "loading access" in normalized or "yard space" in normalized:
+    if _matches_loading_access_concept(query_text):
         return QueryPlan(
             route_mode="hybrid",
             query_type="loading_access_search",
             route_confidence=Decimal("0.9500"),
-            reason_codes=["hybrid", "chunk_keyword_search", "industrial_features"],
+            reason_codes=["hybrid", "hybrid_local_retrieval", "chunk_keyword_search", "industrial_features"],
             filters={
                 "property_type": "industrial",
-                "concept": "loading_access_or_yard_space",
-                "expanded_terms": LOADING_ACCESS_EXPANDED_TERMS,
-                "retrieval_mode": "keyword_chunk_search",
+                "concept": LOADING_ACCESS_CONCEPT,
+                "expanded_terms": _loading_access_expanded_terms(),
+                "query_text": query_text,
+                "retrieval_mode": "hybrid_lexical_fuzzy",
             },
         )
 

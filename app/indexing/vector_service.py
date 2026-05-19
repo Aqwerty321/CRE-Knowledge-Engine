@@ -254,7 +254,7 @@ async def _search_qdrant(query_vector: list[float], *, candidate_limit: int) -> 
     return list(result) if isinstance(result, list) else []
 
 
-async def _rerank(query: str, documents: list[str]) -> dict[int, float]:
+async def rerank_documents(query: str, documents: list[str]) -> dict[int, float]:
     settings = get_settings()
     if not documents:
         return {}
@@ -322,7 +322,7 @@ async def search_vector_chunks(
 
     ordered_rows = sorted(rows, key=lambda row: point_scores.get(row[0].id, 0.0), reverse=True)
     documents = [row[0].chunk_text[:3000] for row in ordered_rows]
-    rerank_scores = await _rerank(query, documents)
+    rerank_scores = await rerank_documents(query, documents)
 
     matches: list[VectorChunkMatch] = []
     for index, (chunk, source_document, property_record) in enumerate(ordered_rows):
@@ -356,5 +356,6 @@ __all__ = [
     "check_vector_dependencies",
     "index_all_chunks",
     "index_chunks_by_ids",
+    "rerank_documents",
     "search_vector_chunks",
 ]

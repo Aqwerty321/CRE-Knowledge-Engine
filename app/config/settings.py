@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     rerank_url: str = "http://127.0.0.1:8002/v1/rerank"
     rerank_model: str = "qwen3-reranker-0.6b"
     rerank_request_timeout_seconds: float = 20.0
+    retrieval_config_path: Path = Field(default_factory=lambda: Path("app/retrieval/retrieval_config.json"))
     ocr_enabled: bool = False
     ocr_backend_url: str = "http://127.0.0.1:5003"
     ocr_timeout_seconds: float = 1800.0
