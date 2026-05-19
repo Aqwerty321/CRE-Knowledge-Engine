@@ -289,7 +289,7 @@ def test_loading_access_query_returns_hybrid_keyword_results(
     assert snapshot.dependency_state_json["keyword_fallback"] is True
     assert snapshot.dependency_state_json["retrieval_mode"] == "hybrid_lexical_fuzzy"
     assert "bm25" in snapshot.dependency_state_json["retrieval_contributors"]
-    assert "rapidfuzz" in snapshot.dependency_state_json["retrieval_layers"]
+    assert "polyfuzz" in snapshot.dependency_state_json["retrieval_layers"]
 
 
 @pytest.mark.golden
@@ -334,7 +334,7 @@ def test_noisy_loading_access_query_uses_alias_and_fuzzy_retrieval(
     assert snapshot.dependency_state_json["retrieval_mode"] == "hybrid_lexical_fuzzy"
     assert "dock doors" in snapshot.filters_json["expanded_terms"]
     assert "trailer parking" in snapshot.dependency_state_json["query_expansion_terms"]
-    assert set(snapshot.dependency_state_json["retrieval_contributors"]) & {"bm25", "rapidfuzz", "tfidf_char"}
+    assert set(snapshot.dependency_state_json["retrieval_contributors"]) & {"bm25", "polyfuzz", "tfidf_char"}
 
 
 @pytest.mark.golden

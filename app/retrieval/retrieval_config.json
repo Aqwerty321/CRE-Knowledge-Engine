@@ -30,7 +30,7 @@
   "weights": {
     "bm25": 1.0,
     "substring": 0.55,
-    "rapidfuzz": 0.85,
+    "polyfuzz": 0.85,
     "tfidf_char": 0.75,
     "qdrant_vector": 1.1,
     "rerank": 1.2
@@ -38,7 +38,7 @@
   "enabled_retrievers": {
     "bm25": true,
     "substring": true,
-    "rapidfuzz": true,
+    "polyfuzz": true,
     "tfidf_char": true,
     "qdrant_vector": true,
     "rerank": true

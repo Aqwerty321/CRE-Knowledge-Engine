@@ -153,6 +153,16 @@ def build_query_plan(query_text: str) -> QueryPlan:
             },
         )
 
+    structured_spec = build_structured_query_spec(query_text)
+    if structured_spec is not None and structured_spec.intent == "tenant_fit":
+        return QueryPlan(
+            route_mode=structured_spec.route_mode,
+            query_type=f"generic_{structured_spec.intent}",
+            route_confidence=structured_spec.route_confidence,
+            reason_codes=structured_spec.reason_codes,
+            filters=structured_spec.to_filters(),
+        )
+
     if _matches_loading_access_concept(query_text):
         return QueryPlan(
             route_mode="hybrid",
@@ -168,7 +178,6 @@ def build_query_plan(query_text: str) -> QueryPlan:
             },
         )
 
-    structured_spec = build_structured_query_spec(query_text)
     if structured_spec is not None:
         return QueryPlan(
             route_mode=structured_spec.route_mode,

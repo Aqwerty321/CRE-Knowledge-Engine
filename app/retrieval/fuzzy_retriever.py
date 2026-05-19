@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from math import isnan
+from typing import Any
+
 from app.retrieval.retrieval_types import RetrievalDocument, RetrievalHit
 from app.retrieval.text_utils import matched_terms_in_text, normalize_text
 
 try:
-    from rapidfuzz import fuzz
+    from polyfuzz import PolyFuzz
 except ImportError:  # pragma: no cover - fallback behavior is covered through disabled status
-    fuzz = None
+    PolyFuzz = None
 
 try:
     from sklearn.feature_extraction.text import TfidfVectorizer
@@ -14,10 +17,25 @@ except ImportError:  # pragma: no cover - fallback behavior is covered through d
     TfidfVectorizer = None
 
 
-class RapidFuzzRetriever:
-    """Typo-tolerant matching for shorthand, partial names, and noisy phrasing."""
+def _polyfuzz_similarity(model: Any, source: str, target: str) -> float:
+    if not source or not target:
+        return 0.0
+    try:
+        model.match([source], [target])
+        matches = model.get_matches()
+        if matches.empty:
+            return 0.0
+        raw_score: Any = matches.iloc[0].get("Similarity", 0.0)
+        score = float(raw_score)
+    except Exception:  # noqa: BLE001 - fuzzy retrieval should degrade to other layers
+        return 0.0
+    return 0.0 if isnan(score) else max(0.0, min(1.0, score))
 
-    name = "rapidfuzz"
+
+class PolyFuzzRetriever:
+    """PolyFuzz edit-distance matching for shorthand, partial names, and noisy phrasing."""
+
+    name = "polyfuzz"
 
     def __init__(self, *, enabled: bool = True, min_score: float = 0.55) -> None:
         self.enabled = enabled
@@ -25,7 +43,7 @@ class RapidFuzzRetriever:
 
     @property
     def available(self) -> bool:
-        return self.enabled and fuzz is not None
+        return self.enabled and PolyFuzz is not None
 
     def retrieve(
         self,
@@ -40,14 +58,11 @@ class RapidFuzzRetriever:
 
         normalized_query = normalize_text(query_text)
         probes = [normalized_query, *expanded_terms]
+        model = PolyFuzz("EditDistance")
         scored: list[RetrievalHit] = []
         for document in documents:
             normalized_text = normalize_text(document.text)
-            score = max(
-                float(fuzz.partial_ratio(probe, normalized_text)) / 100.0
-                for probe in probes
-                if probe
-            )
+            score = max((_polyfuzz_similarity(model, probe, normalized_text) for probe in probes if probe), default=0.0)
             if score < self.min_score:
                 continue
             scored.append(
@@ -137,4 +152,4 @@ class TfidfNgramRetriever:
         ]
 
 
-__all__ = ["RapidFuzzRetriever", "TfidfNgramRetriever"]
+__all__ = ["PolyFuzzRetriever", "TfidfNgramRetriever"]

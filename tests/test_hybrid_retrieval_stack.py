@@ -34,7 +34,7 @@ def _config(*, bm25_enabled: bool = True) -> HybridRetrievalConfig:
             "enabled_retrievers": {
                 "bm25": bm25_enabled,
                 "substring": True,
-                "rapidfuzz": True,
+                "polyfuzz": True,
                 "tfidf_char": True,
                 "qdrant_vector": False,
                 "rerank": False,
@@ -85,7 +85,7 @@ def test_hybrid_pipeline_typo_match_uses_fuzzy_layers() -> None:
 
     assert result.candidates[0].document.id == "elm"
     contributors = {item.retriever for item in result.candidates[0].contributions}
-    assert contributors & {"rapidfuzz", "tfidf_char"}
+    assert contributors & {"polyfuzz", "tfidf_char"}
 
 
 def test_hybrid_pipeline_shorthand_alias_expansion() -> None:
@@ -108,7 +108,7 @@ def test_hybrid_pipeline_falls_back_when_bm25_is_disabled() -> None:
 
     assert result.candidates[0].document.id == "elm"
     assert result.layer_status["bm25"] == "disabled"
-    assert {item.retriever for item in result.candidates[0].contributions} & {"substring", "rapidfuzz", "tfidf_char"}
+    assert {item.retriever for item in result.candidates[0].contributions} & {"substring", "polyfuzz", "tfidf_char"}
 
 
 def test_router_uses_alias_config_for_noisy_loading_queries() -> None:

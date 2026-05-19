@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from app.retrieval.alias_expansion import AliasExpander, QueryExpansion
 from app.retrieval.fusion import ReciprocalRankFusion
-from app.retrieval.fuzzy_retriever import RapidFuzzRetriever, TfidfNgramRetriever
+from app.retrieval.fuzzy_retriever import PolyFuzzRetriever, TfidfNgramRetriever
 from app.retrieval.lexical_retriever import BM25LexicalRetriever, SubstringLexicalRetriever
 from app.retrieval.reranking import HybridReranker, RerankHook
 from app.retrieval.retrieval_config import HybridRetrievalConfig
@@ -44,8 +44,8 @@ class LocalHybridRetrievalPipeline:
         retrievers = [
             BM25LexicalRetriever(enabled=self.config.retriever_enabled("bm25")),
             SubstringLexicalRetriever(enabled=self.config.retriever_enabled("substring")),
-            RapidFuzzRetriever(
-                enabled=self.config.retriever_enabled("rapidfuzz"),
+            PolyFuzzRetriever(
+                enabled=self.config.retriever_enabled("polyfuzz"),
                 min_score=self.config.fuzzy_min_score,
             ),
             TfidfNgramRetriever(

@@ -8,16 +8,16 @@ The point is not to make Slack feel like a chatbot. The point is to help a broke
 
 - It answers CRE questions from Slack messages and files, and it cites where the answer came from.
 - It parses PDFs, XLSX, CSV, text files, images, and scanned documents into usable property facts.
-- It keeps provenance for square footage, rent, availability, market, source row or page, Slack sender, channel, and timestamp.
+- It keeps the useful receipt for each fact: square footage, rent, availability, market, source row or page, Slack sender, channel, and timestamp.
 - It uses Postgres for exact facts: filters, proximity, aggregation, source lookup, and conflict handling.
-- It uses Qdrant, local embeddings, and reranking when the question depends on source text, such as loading access or yard space.
-- It gives the user two Slack actions: `Show sources` for the evidence trail, and `Look deeper` for a Toolhouse review.
+- It uses BM25S, PolyFuzz, TF-IDF character n-grams, optional Qdrant, and reranking when the question depends on source text, such as loading access or yard space.
+- It gives the user two Slack actions: `Show sources` for the supporting rows/pages/messages, and `Look deeper` for a Toolhouse review.
 - It validates Toolhouse citations against backend evidence IDs before posting a deeper answer.
 - It can replay answers, run golden evals, execute readiness checks, and generate a submission report.
 
 Current verification:
 
-- `uv run pytest -q` passes 81 tests with no known failures or warning noise.
+- `uv run pytest -q` passes 88 tests with no known failures or warning noise.
 - `uv run cre-cli demo-doctor --live-toolhouse` returns `ready`, including public callback health and live Toolhouse validation with no local fallback.
 - `uv run cre-cli demo-dry-run --live-toolhouse` passes the recording query sequence and returns replay commands for each answer.
 - `uv run cre-cli secret-scan` scans source, docs, config, and sample files with 0 findings.
@@ -178,18 +178,18 @@ flowchart LR
         direction TB
         V0[Alias expansion\nretrieval_config.json]
         V1[Local lexical stack\nBM25S + substring]
-        V2[Fuzzy stack\nRapidFuzz + TF-IDF char n-grams]
+        V2[Fuzzy stack\nPolyFuzz edit distance + TF-IDF char n-grams]
         V3[RRF fusion\nrank-based merge + matched-term gate]
         V4[Optional semantic stack\nQdrant + local reranker]
         V5[Layer status\ncontributors, disabled deps, expansion terms]
     end
 
-    subgraph R[Answering + trust layer]
+    subgraph R[Answering + source checks]
         direction TB
         R1[Query router\ninstant, hybrid, data quality, tenant fit]
         R2[Structured retrieval\nfilters, proximity, aggregation, source lookup, conflicts]
-        R3[Hybrid chunk retrieval\nkeyword fallback + Qdrant/rerank]
-        R4[Answer formatter\nSlack markdown, table, trust receipt]
+        R3[Hybrid chunk retrieval\nlocal fusion + optional vector/rerank]
+        R4[Answer formatter\nSlack markdown, table, source receipt]
         R5[Replay + eval surface\nexplain-query, replay-query, eval-golden]
     end
 
@@ -225,7 +225,7 @@ flowchart LR
     class S3,S4 surface
 ```
 
-### 4. Toolhouse Trust Boundary
+### 4. Toolhouse Can Review, Not Invent
 
 ```mermaid
 %%{init: {"flowchart": {"curve": "basis", "nodeSpacing": 34, "rankSpacing": 46}} }%%
@@ -248,7 +248,7 @@ flowchart LR
         J4[worker lifecycle\nclaim, checkpoint, retry, post/update Slack]
     end
 
-    subgraph A[FastAPI boundary]
+    subgraph A[Backend-owned gate]
         direction TB
         A4[CRE Backend MCP\n/toolhouse/mcp + bearer/url-token auth]
     end
@@ -258,7 +258,7 @@ flowchart LR
         T1[Toolhouse Workers API]
         T2[Toolhouse agent]
         T3[Backend tool surface\nexplain evidence, search, aggregate, nearby, chunks, source detail, audit]
-        T4[Citation validator\nallowed evidence IDs only]
+        T4[Citation check\nallowed evidence IDs only]
         T5[Agent run trace\nraw response, parsed payload, validation, fallback]
     end
 
@@ -273,7 +273,7 @@ flowchart LR
 
     subgraph R[Validated Slack update]
         direction TB
-        R4[Answer formatter\nSlack markdown, table, trust receipt]
+        R4[Answer formatter\nSlack markdown, table, source receipt]
     end
 
     S3 --> J3 --> J4 --> T1 --> T2
@@ -335,7 +335,7 @@ flowchart LR
 
     subgraph R[Inspectable answer surface]
         direction TB
-        R4[Answer formatter\nSlack markdown, table, trust receipt]
+        R4[Answer formatter\nSlack markdown, table, source receipt]
         R5[Replay + eval surface\nexplain-query, replay-query, eval-golden]
     end
 
@@ -362,7 +362,7 @@ flowchart LR
 
 The diagrams are split on purpose. The first five show the running system without turning everything into one unreadable graph. The README coverage was checked against a fresh Graphify rebuild so the less-visible pieces remain represented: CLI commands, health checks, settings and migrations, the worker loop, the Slack gateway, Toolhouse MCP auth, and the Graphify map itself.
 
-The most important boundary is simple: Postgres is where the system keeps sources, facts, jobs, evidence, answer snapshots, and agent runs. Toolhouse can write a deeper explanation, but the backend decides what evidence exists and whether the returned citations are valid.
+The key rule is simple: Postgres keeps the sources, facts, jobs, selected evidence, answer snapshots, and Toolhouse run logs. Toolhouse can write the deeper read, but it has to stay inside the evidence package the backend already selected.
 
 ## How Data Gets In
 
@@ -643,7 +643,7 @@ flowchart LR
     P --> S{Route decision}
     S -->|instant| I[Structured Postgres path]
     S -->|hybrid| X[Alias expansion\nquery-time only]
-    X --> H[Local hybrid retrieval\nBM25S, substring, RapidFuzz, TF-IDF]
+    X --> H[Local hybrid retrieval\nBM25S, substring, PolyFuzz, TF-IDF]
     H --> F[RRF fusion\nrank merge + feature-term gate]
     F --> O[Optional rerank hook\nQdrant/local reranker when enabled]
     S -->|failed| U[Supported-pattern response]
@@ -651,7 +651,7 @@ flowchart LR
     O --> E
     U --> A[AnswerSnapshot]
     E --> A
-    A --> B[Slack answer blocks\ntrust receipt + actions]
+    A --> B[Slack answer blocks\nsource receipt + actions]
     B --> D[Show sources]
     B --> L[Look deeper]
     L --> T[Toolhouse agent mode\nallowed evidence bundle]
@@ -666,7 +666,7 @@ The router is small by design. For each question it writes down the route, query
 | Aggregation | `instant` | Resolves source/uploader references such as John's industrial files, dedupes by `duplicate_group_key`, and sums `sq_ft` in Postgres. |
 | Exact/source lookup | `instant` | Matches normalized address plus field value, then returns the source rows/pages where the value appeared. |
 | Conflict review | `hybrid` | Uses a duplicate group such as Harbor Rd, orders candidates by source authority, freshness, and posting time, then labels evidence as selected, supporting, or superseded. |
-| Loading or yard language | `hybrid` | Expands aliases such as dock doors, truck court, and trailer parking, then fuses BM25, substring, RapidFuzz, TF-IDF character n-gram, and optional Qdrant/rerank candidates. |
+| Loading or yard language | `hybrid` | Expands aliases such as dock doors, truck court, and trailer parking, then fuses BM25, substring, PolyFuzz edit distance, TF-IDF character n-gram, and optional Qdrant/rerank candidates. |
 | Generic structured search | `instant` | Builds a transparent query constructor with conditions, sort, and limit, then returns deduped structured matches. |
 | Tenant fit | `hybrid` | Runs a local heuristic over price, size, availability, source quality, and logistics terms, then invites `Look deeper` for Toolhouse review. |
 | Data quality | `instant` | Scans indexed sources and property rows for missing fields, sources without chunks/properties, and duplicate groups with conflicting numeric facts. |
@@ -681,7 +681,7 @@ The ranking rules are meant to be easy to audit:
 - Structured matches score field coverage plus source quality: matched-field count, `source_authority_score`, `freshness_score`, and extraction confidence. Dedupe keeps the strongest row per `duplicate_group_key`.
 - Sort requests are explicit: cheapest sorts by `price_per_sq_ft`, largest by `sq_ft`, and soonest availability by `availability_date`.
 - Generic structured searches return the top deduped records after filters and sort. Exact lookups can keep multiple rows so source agreement or conflict is visible.
-- Loading-access retrieval uses configurable alias expansion, BM25S lexical ranking, RapidFuzz typo tolerance, TF-IDF character n-grams, optional Qdrant candidates, and Reciprocal Rank Fusion. A listing that matches multiple concrete feature terms still outranks a weaker partial match, all else equal.
+- Loading-access retrieval uses configurable alias expansion, BM25S lexical ranking, PolyFuzz edit-distance matching, TF-IDF character n-grams, optional Qdrant candidates, and Reciprocal Rank Fusion. A listing that matches multiple concrete feature terms still outranks a weaker partial match, all else equal.
 - Vector retrieval combines Qdrant and rerank scores as `0.35 * vector_score + 0.65 * rerank_score` when rerank is available; otherwise it uses the clamped vector score.
 - Tenant-fit local scoring uses source quality, near-term availability, price under `$35/SF`, scale above `15,000 SF`, and logistics terms such as loading dock, yard, and trailer storage.
 
@@ -691,10 +691,10 @@ Missing data is handled directly instead of being hidden behind a confident answ
 
 - Missing fields stay missing. Renderers say `unknown SF`, `unknown price`, or `availability unknown`; they do not infer values from similar listings.
 - Data-quality questions route to a database report over critical fields: address, property type, square footage, rent, availability, market, coordinates, and source URL.
-- Sources with chunks but no property rows are reported as context-only evidence. They can support source-text search, but they do not become structured facts until extraction produces provenance.
+- Sources with chunks but no property rows are reported as context-only evidence. They can support source-text search, but they do not become structured facts until extraction can point at a real span.
 - No-result structured queries call a relaxed matcher that removes numeric/date blockers and returns closest sourced rows when useful. The answer says which filters were applied and never fabricates a listing.
 - Conflicting duplicate groups are answerable. Harbor Rd, for example, can explain why the fresher 62,000 SF correction outranks an older 58,000 SF inventory row while still citing the superseded source.
-- Field-level provenance lives in `property_field_values`, so a final answer can show not only the normalized value but also the raw value, method, confidence, source span, and extractor version.
+- Field-level receipts live in `property_field_values`, so a final answer can show not only the normalized value but also the raw value, method, confidence, source span, and extractor version.
 
 ### Hybrid Search And Vector Fallbacks
 
@@ -702,26 +702,29 @@ Hybrid search is conservative. Local lexical and fuzzy retrieval are the baselin
 
 1. Query-time expansion reads [app/retrieval/retrieval_config.json](app/retrieval/retrieval_config.json). The source corpus is not mutated; the expanded terms live only on the query path and are recorded in `dependency_state_json`.
 2. BM25S ranks the in-memory chunk corpus lexically. A standard-library substring retriever remains available as a simple fallback when exact configured terms are enough.
-3. RapidFuzz handles typos, shorthand, partial names, and alias phrasing. TF-IDF character n-grams add another lightweight signal for noisy text overlap.
+3. PolyFuzz edit distance handles typos, shorthand, partial names, and alias phrasing. TF-IDF character n-grams add another lightweight signal for noisy text overlap.
 4. Optional Qdrant retrieval embeds `chunks.chunk_text` with `qwen3-embedding-0_6b-q8_0`, retrieves `cre_chunks`, and joins candidate chunk IDs back to Postgres. The existing `qwen3-reranker-0.6b` endpoint is exposed as a final rerank hook when vector search is enabled.
 5. Candidate lists are merged with Reciprocal Rank Fusion, so each layer can keep its own scoring scale. Final evidence is deduped by `duplicate_group_key`, scored with relevance, authority, freshness, and matched feature coverage, then persisted exactly like structured evidence.
 6. Loading-access search still requires concrete expanded-term hits in the chunk text. A broad semantic match without the expected source language does not become evidence.
 7. `dependency_state_json` records layer status, contributors, query expansion terms, Qdrant/rerank usage, and disabled dependencies, so replay can explain why the answer looked the way it did.
 
-That means exact structured answers still work when Qdrant is down, and source-text questions still get local BM25/RapidFuzz/TF-IDF retrieval before any optional vector layer is considered.
+That means exact structured answers still work when Qdrant is down, and source-text questions still get local BM25S/PolyFuzz/TF-IDF retrieval before any optional vector layer is considered.
 
 ### Instant Answers And Agent Mode
 
-Most Slack answers use the `instant_answer` path, even when the route mode is `hybrid`. The flow is predictable: route the question, retrieve evidence, render the answer, save the evidence, save the snapshot, and post the Slack reply with actions.
+There are two names here, and they do different jobs. `instant_answer` is the delivery mode: the backend can answer now without waiting for Toolhouse. `route_mode` is the retrieval choice: `instant` means structured Postgres work, while `hybrid` means local chunk retrieval with lexical/fuzzy/vector signals. So a hybrid route can still produce an instant answer because it is still local and replayable.
+
+The normal flow is predictable: route the question, retrieve evidence, render the answer, save the evidence, save the snapshot, and post the Slack reply with actions.
 
 Agent mode starts only when the user clicks `Look deeper` or an operator runs the deeper-review path. The payload comes from `explain-query`: original question, local answer, route mode, reason codes, filters, allowed evidence IDs, evidence bundle, field details, and decision summary.
 
-Toolhouse can synthesize over that bundle, but it cannot expand the evidence set on its own. The backend expects a structured response with status, rendered answer, cited evidence IDs, confidence label, reasoning summary, tools used, unsupported claims dropped, missing data, and suggested follow-ups. The citation validator rejects unknown evidence IDs and unsupported tool names before the answer reaches Slack.
+Toolhouse can write the second pass over that bundle, but it cannot bring in new facts on its own. The backend expects a structured response with status, rendered answer, cited evidence IDs, confidence label, reasoning summary, tools used, unsupported claims dropped, missing data, and suggested follow-ups. Unknown evidence IDs and unsupported tool names get rejected before the answer reaches Slack.
 
 So the modes stay separate:
 
-- `instant_answer`: fast, local, replayable, and good for filters, aggregations, proximity, exact lookup, conflict explanation, and data quality.
-- `hybrid` route mode: still local, but it can use chunk search, vector/rerank, and source-text evidence.
+- `instant_answer`: fast, local, replayable delivery. It can use either structured retrieval or local hybrid retrieval.
+- `instant` route mode: structured Postgres work for filters, aggregations, proximity, exact lookup, conflict explanation, and data quality.
+- `hybrid` route mode: still local, but it can use chunk search, BM25S, PolyFuzz, TF-IDF, optional vector/rerank, and source-text evidence.
 - `agent_mode`: Toolhouse-backed deeper review over an allowed evidence package, saved in `agent_runs`, with backend citation validation and local fallback behavior.
 
 ### Design Choices Worth Calling Out
@@ -729,7 +732,7 @@ So the modes stay separate:
 - Postgres does two jobs: it stores the evidence and runs the queue. That keeps the operating model compact while still giving idempotency, retries, checkpoints, and replay.
 - Slack appearances are separate from canonical documents. If someone shares the same file again, the app keeps the new Slack context without duplicating the facts.
 - The app does not pretend it has a perfect master property table. It groups likely duplicates when answering, which makes conflicts easier to explain.
-- LLM and Toolhouse work happen after retrieval. They can explain and compare evidence, but they cannot create trusted facts or bypass allowed evidence IDs.
+- LLM and Toolhouse work happen after retrieval. They can explain and compare evidence, but they cannot invent facts or cite IDs the backend did not allow.
 - Missing data is visible. Data-quality answers and no-result explanations make the system's unknowns explicit.
 - Degraded dependencies are visible too. Qdrant, rerank, OCR, Toolhouse, and local fallback states are recorded in health checks and answer snapshots.
 - Verification tooling is part of the system, not an afterthought: golden evals, replay, readiness checks, secret scan, submission report, and the Graphify map all check that the app behaves the way this README says it does.
@@ -742,11 +745,11 @@ A broker can ask:
 | --- | --- |
 | `What properties do we have available near 123 Main Street?` | Proximity search over normalized property records with sourced nearby results. |
 | `Show office buildings under $50/sq ft.` | Exact structured filtering that excludes higher-priced office inventory. |
-| `Find listings that mention loading access or yard space.` | Hybrid retrieval over source text and field notes, with keyword fallback and Qdrant/rerank support. |
+| `Find listings that mention loading access or yard space.` | Hybrid retrieval over source text and field notes, with BM25S, PolyFuzz, TF-IDF, and optional Qdrant/rerank support. |
 | `Why did you use 62k sq ft for Harbor Rd?` | Freshness and authority conflict handling with selected, supporting, and superseded evidence. |
 | `Look deeper` | Toolhouse review over the allowed evidence bundle, with backend citation validation. |
 
-Every factual answer includes a small trust receipt: which route was used, how many evidence items were checked, and why those sources were selected. `Show sources` opens the evidence trail. `replay-query` rebuilds the stored answer outside Slack.
+Every factual answer includes a small source receipt: which route was used, how many evidence items were checked, and why those sources were selected. `Show sources` opens the rows, pages, files, and Slack messages behind the answer. `replay-query` rebuilds the stored answer outside Slack.
 
 ## Why It Is Credible
 
@@ -756,7 +759,7 @@ The implementation favors plain reliability where facts matter:
 
 - Slack is acknowledged quickly; slow parsing, indexing, answering, and Toolhouse calls run through background jobs.
 - Live ingestion is conservative so generic chatter is not treated as evidence.
-- Source appearances are stored separately from canonical documents, so repeated Slack shares keep provenance without duplicating facts.
+- Source appearances are stored separately from canonical documents, so repeated Slack shares keep their Slack context without duplicating facts.
 - Golden evals verify routes, expected addresses, source labels, reason codes, evidence order, and dependency state.
 - Agent runs persist Toolhouse/local deeper-review traces, raw responses, parsed payloads, citation validation, fallback state, and rendered output.
 
@@ -818,7 +821,7 @@ uv run cre-cli submission-report --format markdown --output .runtime/submission-
 
 - [app/main.py](app/main.py) creates the FastAPI app and worker lifecycle.
 - [app/slack/](app/slack) owns Slack intake, answer rendering, source actions, and seed-data sync.
-- [app/ingestion/](app/ingestion) handles sample import, Slack backfill, live ingestion, source provenance, and quality checks.
+- [app/ingestion/](app/ingestion) handles sample import, Slack backfill, live ingestion, source receipts, and quality checks.
 - [app/extraction/](app/extraction) parses native files and routes image/scanned-document OCR.
 - [app/retrieval/](app/retrieval) and [app/routing/](app/routing) implement structured, hybrid, tenant-fit, and data-quality retrieval, including configurable aliases and retrieval weights in [app/retrieval/retrieval_config.json](app/retrieval/retrieval_config.json).
 - [app/answering/query_service.py](app/answering/query_service.py) writes queries, evidence items, answer snapshots, and explanation payloads.
@@ -838,5 +841,5 @@ uv run cre-cli submission-report --format markdown --output .runtime/submission-
 ## Trade-offs And Next Steps
 
 - The core implementation constraint is evidence continuity: Slack ingestion, document parsing, retrieval, citations, Slack actions, and Toolhouse review all operate on the same stored evidence IDs.
-- The main architectural trade-off is a saved evidence trail plus Postgres-backed jobs instead of a heavier orchestration layer. That keeps replay, idempotency, retries, and provenance straightforward in a CRE workflow where rent, square footage, availability, and source lineage matter.
+- The main architectural trade-off is a saved evidence trail plus Postgres-backed jobs instead of a heavier orchestration layer. That keeps replay, idempotency, retries, and source lineage straightforward in a CRE workflow where rent, square footage, and availability matter.
 - The next production steps are OAuth and multi-workspace permissions, admin review for low-confidence extraction, object storage for files, telemetry dashboards, external geocoding and drive-time search, retrieval benchmark snapshots, and retention/deletion workflows for Slack-originated data.

@@ -13,7 +13,7 @@ from app.retrieval.text_utils import dedupe_strings, normalize_text
 DEFAULT_WEIGHTS = {
     "bm25": 1.00,
     "substring": 0.55,
-    "rapidfuzz": 0.85,
+    "polyfuzz": 0.85,
     "tfidf_char": 0.75,
     "qdrant_vector": 1.10,
     "rerank": 1.20,
@@ -22,7 +22,7 @@ DEFAULT_WEIGHTS = {
 DEFAULT_ENABLED_RETRIEVERS = {
     "bm25": True,
     "substring": True,
-    "rapidfuzz": True,
+    "polyfuzz": True,
     "tfidf_char": True,
     "qdrant_vector": True,
     "rerank": True,

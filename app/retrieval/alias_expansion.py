@@ -1,14 +1,38 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import isnan
+from typing import Any
 
 from app.retrieval.retrieval_config import HybridRetrievalConfig
 from app.retrieval.text_utils import contains_phrase, dedupe_strings, normalize_text
 
 try:
-    from rapidfuzz import fuzz
+    from polyfuzz import PolyFuzz
 except ImportError:  # pragma: no cover - dependency fallback is exercised through availability status
-    fuzz = None
+    PolyFuzz = None
+
+
+def _polyfuzz_similarity(model: Any, source: str, target: str) -> float:
+    if not source or not target:
+        return 0.0
+    try:
+        model.match([source], [target])
+        matches = model.get_matches()
+        if matches.empty:
+            return 0.0
+        raw_score: Any = matches.iloc[0].get("Similarity", 0.0)
+        score = float(raw_score)
+    except Exception:  # noqa: BLE001 - alias expansion can continue without fuzzy matching
+        return 0.0
+    return 0.0 if isnan(score) else max(0.0, min(1.0, score))
+
+
+def _windows(value: str, *, token_count: int) -> tuple[str, ...]:
+    tokens = value.split()
+    if token_count <= 0 or len(tokens) < token_count:
+        return ()
+    return tuple(" ".join(tokens[index : index + token_count]) for index in range(0, len(tokens) - token_count + 1))
 
 
 @dataclass(frozen=True)
@@ -70,9 +94,14 @@ class AliasExpander:
             return False
         if contains_phrase(normalized_query, normalized_phrase):
             return True
-        if fuzz is None or len(normalized_phrase) < 5:
+        if PolyFuzz is None or len(normalized_phrase) < 5:
             return False
-        return float(fuzz.partial_ratio(normalized_phrase, normalized_query)) >= self.fuzzy_threshold
+        token_count = len(normalized_phrase.split())
+        candidates = (normalized_query, *_windows(normalized_query, token_count=token_count), *_windows(normalized_query, token_count=token_count + 1))
+        model = PolyFuzz("EditDistance")
+        return max((_polyfuzz_similarity(model, normalized_phrase, candidate) for candidate in candidates), default=0.0) >= (
+            self.fuzzy_threshold / 100.0
+        )
 
 
 __all__ = ["AliasExpander", "QueryExpansion"]
