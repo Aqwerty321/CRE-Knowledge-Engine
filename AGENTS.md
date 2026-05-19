@@ -39,9 +39,9 @@ The implementation-facing sources of truth are now:
 - The refined planning docs now convert the raw ideation into an ambitious MVP build plan, Slack/Toolhouse integration plan, data dictionary, retrieval/routing spec, sample-data plan, architecture council review, scope rebalance, delivery timeline, demo runbook, pre-agent-mode audit, and Toolhouse readiness checkpoint.
 - Local `Look deeper` is wired through Slack, queued as a worker job, validated against allowed evidence IDs, and backed by deterministic Toolhouse-facing functions in `app/toolhouse/`.
 - The configured MCP entries are Toolhouse and `graphifyLocal`, defined in [.vscode/mcp.json](.vscode/mcp.json).
-- `graphify-out/graph.json` exists and was rebuilt on 2026-05-17.
-- Verified graph stats: 549 nodes, 928 edges, 45 communities.
-- Current full-suite validation: `uv run pytest -q` passes 81 tests.
+- `graphify-out/graph.json` exists and was rebuilt on 2026-05-19.
+- Verified graph stats: 767 nodes, 1345 edges, 56 communities.
+- Current full-suite validation: `uv run pytest -q` passes 97 tests.
 
 ## Working guidance
 

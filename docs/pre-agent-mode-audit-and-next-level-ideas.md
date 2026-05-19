@@ -8,26 +8,27 @@ The goal is to be honest about what is already strong, identify the gaps that ca
 
 ## Graphify Snapshot
 
-Graphify was rebuilt on 2026-05-17 with the repo-local command:
+Graphify was rebuilt on 2026-05-19 with the repo-local command:
 
 ```bash
 ./.opencode/scripts/build-graphify
 ```
 
-The graph was refreshed again after the native parsing and Slack ingestion pass. The latest report is:
+The graph was refreshed again after the hybrid retrieval, expanded corpus, and live Slack workflow pass. The latest report is:
 
-- 549 nodes;
-- 928 edges;
-- 45 communities.
+- 767 nodes;
+- 1345 edges;
+- 56 communities.
 
 The graph's highest-signal hubs now match the real implementation, not just the planning docs:
 
+- `LocalHybridRetrievalPipeline`, `RetrievalDocument`, and `RetrievalHit` for the lexical/fuzzy/vector retrieval stack;
 - `import_sample_dataset()` for the source/evidence ingestion spine;
 - `answer_query()` and `explain_query()` for answer orchestration and trust receipts;
-- `build_live_demo_datasets()` for live Slack metadata sync;
+- `build_live_demo_datasets()` and `_build_live_file_matches()` for live Slack metadata sync, including title/name file matching;
 - `enqueue_slack_ingestion_event()` and `ingest_slack_file_checkpoint()` for live Slack message/file ingestion;
 - `parse_source_file()` for native PDF/XLSX/CSV/text parsing;
-- `SlackPersonaSeeder` and `SlackFileSeeder` for workspace preparation;
+- `SlackPersonaSeeder` and `SlackFileSeeder` for live workspace preparation;
 - `process_pending_query_jobs()` and `run_query_worker_loop()` for the Slack answer loop;
 - `build_answer_blocks()` and `get_slack_app()` for the current Slack interface boundary.
 

@@ -14,7 +14,7 @@ from app.answering.query_service import answer_query, explain_query
 from app.db.session import SessionFactory, engine
 from app.evaluation import replay_query, run_golden_evals
 from app.ingestion.sample_importer import import_sample_data
-from app.models import AnswerSnapshot, EvidenceItem, Query
+from app.models import AnswerSnapshot, EvidenceItem, Query, SourceDocument
 
 
 def _ensure_schema() -> None:
@@ -22,12 +22,13 @@ def _ensure_schema() -> None:
 
 
 async def _prepare_query_database() -> None:
-    await import_sample_data(Path("sample-data"))
     async with SessionFactory() as session:
         async with session.begin():
             await session.execute(delete(AnswerSnapshot))
             await session.execute(delete(EvidenceItem))
             await session.execute(delete(Query))
+            await session.execute(delete(SourceDocument))
+    await import_sample_data(Path("sample-data"))
 
 
 async def _load_query_artifacts(query_id: str) -> tuple[Query, list[EvidenceItem], AnswerSnapshot | None]:
@@ -336,12 +337,13 @@ def test_noisy_loading_access_query_uses_alias_and_fuzzy_retrieval(
     assert {"18 Beacon Freight", "130 Elm Ave", "64 Union Yard"}.issubset(set(payload["matched_addresses"]))
     assert "hybrid_local_retrieval" in payload["reason_codes"]
 
-    _query_record, _evidence_items, snapshot = async_runner.run(_load_query_artifacts(payload["query_id"]))
+    _query_record, evidence_items, snapshot = async_runner.run(_load_query_artifacts(payload["query_id"]))
 
     assert snapshot is not None
     assert snapshot.dependency_state_json["retrieval_mode"] == "hybrid_lexical_fuzzy"
     assert "dock doors" in snapshot.filters_json["expanded_terms"]
-    assert "trailer parking" in snapshot.dependency_state_json["query_expansion_terms"]
+    matched_fields = {field for item in evidence_items for field in item.matched_fields}
+    assert {"dock doors", "truck court", "trailer parking"}.issubset(matched_fields)
     assert set(snapshot.dependency_state_json["retrieval_contributors"]) & {"bm25", "polyfuzz", "tfidf_char"}
 
 

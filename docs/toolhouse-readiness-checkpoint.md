@@ -180,14 +180,14 @@ uv run pytest -q
 
 Current result:
 
-- 81 passed;
+- 97 passed;
 - no known failures or warning noise.
 
 Graphify was also rebuilt after this slice:
 
-- 549 nodes;
-- 928 edges;
-- 45 communities.
+- 767 nodes;
+- 1345 edges;
+- 56 communities.
 
 Focused new coverage includes:
 

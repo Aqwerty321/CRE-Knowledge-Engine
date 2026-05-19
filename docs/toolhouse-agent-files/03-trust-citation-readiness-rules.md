@@ -154,7 +154,7 @@ Current validated state:
 - Current full-suite validation: `uv run pytest -q` passes 97 tests with no known failures or warning noise.
 - Current focused Toolhouse validation after completing the backend tool surface, Workers API client, and output-contract validation: `uv run pytest tests/test_toolhouse_client.py tests/test_toolhouse_tools.py tests/test_toolhouse_mcp_server.py -q` passes.
 - Current live Toolhouse smoke: `uv run cre-cli toolhouse-smoke` returned `answered` with no fallback, 4 allowed evidence IDs, 4 cited evidence IDs, and no schema errors.
-- Graphify stats after rebuild: 549 nodes, 928 edges, 45 communities.
+- Graphify stats after rebuild: 767 nodes, 1345 edges, 56 communities.
 
 Still deferred and not blockers for the first Toolhouse demo:
 

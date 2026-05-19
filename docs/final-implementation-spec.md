@@ -9,24 +9,27 @@ The system is not a generic chatbot. It is a retrieval-native intelligence layer
 ## Architecture Overview
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 48, "rankSpacing": 62, "wrappingWidth": 190}, "themeVariables": {"fontSize": "13px"}} }%%
 flowchart LR
-    Slack[Slack channels, threads, files] --> Bolt[Slack Bolt receiver]
-    Bolt --> Queue[Ingestion queue]
-    Queue --> Extract[Extraction and normalization]
-    Extract --> Postgres[(PostgreSQL)]
-    Extract --> Qdrant[(Qdrant)]
-    Slack --> Query[Question handler]
-    Query --> Router[Query router]
-    Router --> Structured[Structured retrieval]
-    Router --> Hybrid[Hybrid retrieval]
-    Router --> Toolhouse[Toolhouse escalation]
-    Structured --> Answer[Answer formatter]
+    Slack["Slack workspace<br/>channels, threads,<br/>files, and actions"]
+    Bolt["FastAPI Slack receiver<br/>signature check,<br/>fast ack, retry dedupe"]
+    Slack --> Bolt
+    Bolt --> Queue[("Postgres job queue<br/>ingestion_jobs with<br/>checkpoints and retries")]
+    Queue --> Extract["Extraction and normalization<br/>parsers, OCR, CRE facts,<br/>source receipts"]
+    Extract --> Postgres[("PostgreSQL<br/>sources, chunks, facts,<br/>queries, evidence, runs")]
+    Extract --> Qdrant[("Qdrant<br/>optional chunk vectors<br/>for hybrid retrieval")]
+    Slack --> Query["Question handler<br/>stores query and<br/>builds a route plan"]
+    Query --> Router["Query router<br/>structured, hybrid,<br/>tenant-fit, data quality"]
+    Router --> Structured["Structured retrieval<br/>filters, proximity,<br/>aggregation, conflicts"]
+    Router --> Hybrid["Local hybrid retrieval<br/>BM25S, substring,<br/>PolyFuzz, TF-IDF,<br/>optional vector/rerank"]
+    Router --> Toolhouse["Toolhouse escalation<br/>only after backend<br/>selects allowed evidence"]
+    Structured --> Answer["Answer formatter<br/>Slack markdown,<br/>source receipt, actions"]
     Hybrid --> Answer
     Toolhouse --> Answer
     Postgres --> Structured
     Postgres --> Hybrid
     Qdrant --> Hybrid
-    Answer --> SlackReply[Threaded Slack reply]
+    Answer --> SlackReply["Threaded Slack reply<br/>answer, Show sources,<br/>Look deeper"]
 ```
 
 ## Service Boundary
