@@ -13,13 +13,15 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.db.session import SessionFactory, engine
 from app.ingestion.sample_importer import SampleDatasetModel, collect_database_counts, import_sample_data, import_sample_dataset, load_sample_manifest
 from app.models import AnswerSnapshot, Chunk, EvidenceItem, IngestionJob, PropertyFieldValue, PropertyRecord, Query, SlackEvent, SlackSourcePost, SourceDocument
+from app.slack.demo_sync import _build_live_file_matches
+from app.slack.service import build_show_sources_text
 
 
 def _ensure_schema() -> None:
     command.upgrade(Config("alembic.ini"), "head")
 
 
-async def _prepare_database() -> None:
+async def _prepare_database(*, include_generated: bool = False) -> None:
     async with SessionFactory() as session:
         async with session.begin():
             await session.execute(delete(AnswerSnapshot))
@@ -31,7 +33,7 @@ async def _prepare_database() -> None:
             await session.execute(delete(PropertyRecord))
             await session.execute(delete(Chunk))
             await session.execute(delete(SourceDocument))
-    await import_sample_data(Path("sample-data"))
+    await import_sample_data(Path("sample-data"), include_generated=include_generated)
 
 
 @pytest.fixture
@@ -46,6 +48,15 @@ def prepared_db(async_runner: asyncio.Runner) -> None:
     try:
         _ensure_schema()
         async_runner.run(_prepare_database())
+    except (OSError, SQLAlchemyError) as exc:
+        pytest.skip(f"Postgres not available for Slack demo sync tests: {exc}")
+
+
+@pytest.fixture
+def prepared_generated_db(async_runner: asyncio.Runner) -> None:
+    try:
+        _ensure_schema()
+        async_runner.run(_prepare_database(include_generated=True))
     except (OSError, SQLAlchemyError) as exc:
         pytest.skip(f"Postgres not available for Slack demo sync tests: {exc}")
 
@@ -88,12 +99,23 @@ async def _load_sources_by_slack_file_id(slack_file_id: str) -> list[SourceDocum
         return list(result.scalars())
 
 
+async def _load_generated_property() -> PropertyRecord | None:
+    async with SessionFactory() as session:
+        result = await session.execute(
+            select(PropertyRecord)
+            .where(PropertyRecord.listing_id.like("LC-%"))
+            .order_by(PropertyRecord.listing_id)
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+
 @pytest.mark.golden
 def test_import_sample_dataset_updates_existing_source_without_duplication(
     prepared_db: None,
     async_runner: asyncio.Runner,
 ) -> None:
-    manifest = load_sample_manifest(Path("sample-data"))
+    manifest = load_sample_manifest(Path("sample-data"), include_generated=False)
     main_source = next(source for source in manifest.sources if source.source_id == "F1")
     expected_source_count = len(manifest.sources)
     updated_source = main_source.model_copy(
@@ -124,6 +146,28 @@ def test_import_sample_dataset_updates_existing_source_without_duplication(
     assert source_document.slack_channel_name == "cre-listings"
     assert source_document.slack_file_id == "F_LIVE_MAIN"
     assert source_document.source_url == "https://slack.example/files/F_LIVE_MAIN"
+
+
+@pytest.mark.golden
+def test_import_sample_data_persists_generated_rich_fields(
+    prepared_generated_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    property_record = async_runner.run(_load_generated_property())
+
+    assert property_record is not None
+    assert property_record.listing_id and property_record.listing_id.startswith("LC-")
+    assert property_record.city
+    assert property_record.locality
+    assert property_record.neighborhood
+    assert property_record.status
+    assert property_record.usage_type
+    assert property_record.furnishing_status
+    assert property_record.additional_information
+    assert property_record.geo_lat is not None
+    assert property_record.geo_lng is not None
+    assert property_record.map_url and "maps/search" in property_record.map_url
+    assert property_record.source_metadata_json["commercial_profile"] == "synthetic_cre_profile"
 
 
 @pytest.mark.golden
@@ -175,7 +219,7 @@ def test_same_slack_file_shared_in_multiple_channels_keeps_distinct_posts(
     prepared_db: None,
     async_runner: asyncio.Runner,
 ) -> None:
-    manifest = load_sample_manifest(Path("sample-data"))
+    manifest = load_sample_manifest(Path("sample-data"), include_generated=False)
     main_source = next(source for source in manifest.sources if source.source_id == "F1")
     shared_file_id = "F_MULTI_CHANNEL_MAIN"
     first_share = main_source.model_copy(
@@ -230,3 +274,54 @@ def test_same_slack_file_shared_in_multiple_channels_keeps_distinct_posts(
     assert len(source_posts) == 2
     assert {post.slack_channel_name for post in source_posts} == {"cre-listings", "cre-private-demo"}
     assert {post.source_document_id for post in source_posts} == {source_documents[0].id}
+
+
+def test_live_file_match_prefers_share_message_permalink() -> None:
+    class FakeClient:
+        def chat_getPermalink(self, *, channel: str, message_ts: str) -> dict[str, str]:
+            return {"permalink": f"https://slack.example/archives/{channel}/p{message_ts.replace('.', '')}"}
+
+    histories = {
+        "cre-listings": [
+            {
+                "ts": "1778999000.000100",
+                "files": [
+                    {
+                        "id": "F_MAIN",
+                        "name": "main-street-office-flyer.pdf",
+                        "title": "Main Street Office Flyer",
+                        "permalink": "https://slack.example/files/F_MAIN",
+                    }
+                ],
+            }
+        ]
+    }
+
+    matches = _build_live_file_matches(FakeClient(), histories, {"cre-listings": "C_LISTINGS"})
+
+    assert matches["main-street-office-flyer.pdf"].source_url == "https://slack.example/archives/C_LISTINGS/p1778999000000100"
+
+
+def test_show_sources_formats_slack_links_and_hides_demo_local() -> None:
+    text = build_show_sources_text(
+        {
+            "status": "explained",
+            "query_text": "show sources",
+            "evidence": [
+                {
+                    "evidence_role": "result",
+                    "source_summary": "Slack seeded file (row 2)",
+                    "source_document": {"source_url": "https://slack.example/archives/C_LISTINGS/p1778999000000100"},
+                },
+                {
+                    "evidence_role": "result",
+                    "source_summary": "Local old file (row 3)",
+                    "source_document": {"source_url": "https://demo.local/files/old.csv"},
+                },
+            ],
+        }
+    )
+
+    assert "<https://slack.example/archives/C_LISTINGS/p1778999000000100|Open source in Slack>" in text
+    assert "demo.local" not in text
+    assert "Local old file" in text

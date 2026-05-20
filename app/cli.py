@@ -25,13 +25,14 @@ from app.evaluation import (
 )
 from app.extraction.parsers import parse_source_file
 from app.indexing import check_vector_dependencies, index_all_chunks
+from app.ingestion.large_corpus_builder import DEFAULT_ROW_COUNT, DEFAULT_SEED, build_large_corpus
 from app.ingestion.quality import collect_ingestion_quality_report
 from app.ingestion.sample_importer import collect_database_counts, import_sample_data, load_sample_manifest
 from app.ingestion.slack_ingestor import backfill_slack_channel_history, prune_slack_storage
 from app.slack.demo_files import SlackFileSeeder
 from app.slack.demo_seed import SlackPersonaSeeder
 from app.slack.demo_sync import sync_live_demo_sources
-from app.toolhouse import run_toolhouse_deeper_review
+from app.toolhouse import is_acceptable_live_toolhouse_outcome, run_toolhouse_deeper_review
 
 
 def sanitize_database_url(database_url: str) -> str:
@@ -102,6 +103,13 @@ def cmd_import_samples() -> int:
     payload = asyncio.run(import_sample_data(settings.sample_data_dir))
     print(json.dumps(payload, indent=2))
     return 0 if payload.get("status") == "imported" else 1
+
+
+def cmd_build_large_corpus(*, rows: int, seed: int) -> int:
+    settings = get_settings()
+    payload = build_large_corpus(settings.sample_data_dir, row_count=rows, seed=seed)
+    print(json.dumps(payload, indent=2))
+    return 0 if payload.get("status") == "generated" else 1
 
 
 def cmd_status() -> int:
@@ -233,10 +241,7 @@ def cmd_toolhouse_smoke(query_text: str) -> int:
     payload = asyncio.run(_run_toolhouse_smoke(query_text))
     print(json.dumps(payload, indent=2))
 
-    validation = dict(payload.get("validation") or {})
-    dependency_state = dict(payload.get("dependency_state") or {})
-    live_toolhouse_succeeded = bool(dependency_state.get("toolhouse")) and not payload.get("toolhouse_fallback")
-    return 0 if payload.get("status") == "answered" and validation.get("valid") and live_toolhouse_succeeded else 1
+    return 0 if is_acceptable_live_toolhouse_outcome(payload) else 1
 
 
 def cmd_audit_data() -> int:
@@ -308,7 +313,7 @@ def cmd_seed_slack_personas(*, dry_run: bool, replace_legacy_prefix: bool, recen
     return 0 if payload.get("status") in {"planned", "seeded"} else 1
 
 
-def cmd_seed_slack_files(*, dry_run: bool, recent_limit: int) -> int:
+def cmd_seed_slack_files(*, dry_run: bool, recent_limit: int, force_upload: bool, file_names: list[str] | None) -> int:
     settings = get_settings()
     if not settings.slack_bot_token:
         print(json.dumps({"status": "error", "error": "missing_slack_bot_token"}, indent=2))
@@ -320,6 +325,8 @@ def cmd_seed_slack_files(*, dry_run: bool, recent_limit: int) -> int:
             sample_files_dir=settings.sample_data_dir / "files",
             dry_run=dry_run,
             recent_limit=recent_limit,
+            force_upload_matching=force_upload,
+            file_names=set(file_names) if file_names else None,
         )
     except SlackApiError as exc:
         payload = {
@@ -501,6 +508,9 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("import-samples")
+    build_large_corpus_parser = subparsers.add_parser("build-large-corpus")
+    build_large_corpus_parser.add_argument("--rows", type=int, default=DEFAULT_ROW_COUNT)
+    build_large_corpus_parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     subparsers.add_parser("status")
     subparsers.add_parser("audit-data")
     index_chunks_parser = subparsers.add_parser("index-chunks")
@@ -543,6 +553,8 @@ def build_parser() -> argparse.ArgumentParser:
     seed_slack_files_parser = subparsers.add_parser("seed-slack-files")
     seed_slack_files_parser.add_argument("--dry-run", action="store_true")
     seed_slack_files_parser.add_argument("--recent-limit", type=int, default=100)
+    seed_slack_files_parser.add_argument("--force-upload", action="store_true")
+    seed_slack_files_parser.add_argument("--file", dest="file_names", action="append")
     sync_slack_sources_parser = subparsers.add_parser("sync-slack-demo-sources")
     sync_slack_sources_parser.add_argument("--recent-limit", type=int, default=100)
     sync_slack_history_parser = subparsers.add_parser("sync-slack-channel-history")
@@ -565,6 +577,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "import-samples":
         return cmd_import_samples()
+    if args.command == "build-large-corpus":
+        return cmd_build_large_corpus(rows=int(args.rows), seed=int(args.seed))
     if args.command == "status":
         return cmd_status()
     if args.command == "audit-data":
@@ -612,6 +626,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return cmd_seed_slack_files(
             dry_run=bool(args.dry_run),
             recent_limit=int(args.recent_limit),
+            force_upload=bool(args.force_upload),
+            file_names=list(args.file_names or []),
         )
     if args.command == "sync-slack-demo-sources":
         return cmd_sync_slack_demo_sources(recent_limit=int(args.recent_limit))

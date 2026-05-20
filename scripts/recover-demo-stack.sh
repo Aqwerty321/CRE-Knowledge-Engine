@@ -47,6 +47,31 @@ wait_for_http_ok() {
     return 1
 }
 
+wait_for_compose_service_healthy() {
+    local service="$1"
+    local label="$2"
+    local attempts="${3:-45}"
+    local attempt
+    local container_id
+    local health_status
+    local running_status
+
+    for ((attempt = 1; attempt <= attempts; attempt += 1)); do
+        container_id="$(cd "$repo_root" && docker compose ps -q "$service")"
+        if [[ -n "$container_id" ]]; then
+            health_status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container_id" 2>/dev/null || true)"
+            running_status="$(docker inspect -f '{{.State.Status}}' "$container_id" 2>/dev/null || true)"
+            if [[ "$health_status" == "healthy" || ( -z "$health_status" && "$running_status" == "running" ) ]]; then
+                return 0
+            fi
+        fi
+        sleep 1
+    done
+
+    warn "$label did not become healthy"
+    return 1
+}
+
 port_in_use() {
     local port="$1"
 
@@ -124,6 +149,16 @@ exit_code=0
 
 log "Starting Postgres and Qdrant via docker compose"
 (cd "$repo_root" && docker compose up -d postgres qdrant >/dev/null)
+
+if wait_for_compose_service_healthy postgres "Postgres" 45; then
+    log "Applying database migrations"
+    if ! (cd "$repo_root" && uv run alembic upgrade head >/dev/null); then
+        warn "Alembic migrations failed"
+        exit_code=1
+    fi
+else
+    exit_code=1
+fi
 
 if http_ok "$backend_health_url"; then
     log "FastAPI already healthy at $backend_health_url"

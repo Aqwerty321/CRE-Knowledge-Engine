@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from slack_sdk import WebClient
+from slack_sdk.errors import SlackApiError
 
 from app.ingestion.sample_importer import SampleDatasetModel, SampleSourceModel, import_sample_dataset, load_sample_manifest
 from app.slack.demo_files import build_default_file_seed_plan
@@ -60,6 +61,16 @@ def _slack_ts_to_datetime(slack_ts: str) -> datetime:
     return datetime.fromtimestamp(float(slack_ts), tz=timezone.utc)
 
 
+def _message_permalink(client: WebClient, *, channel_id: str, slack_ts: str) -> str | None:
+    if not channel_id or not slack_ts:
+        return None
+    try:
+        response = client.chat_getPermalink(channel=channel_id, message_ts=slack_ts)
+        return str(response.get("permalink") or "") or None
+    except SlackApiError:
+        return None
+
+
 def _resolve_channel_ids(client: WebClient, channel_names: set[str]) -> dict[str, str]:
     resolved: dict[str, str] = {}
     cursor: str | None = None
@@ -94,6 +105,7 @@ def _fetch_channel_histories(client: WebClient, channel_ids: dict[str, str], rec
 
 
 def _build_live_file_matches(
+    client: WebClient,
     histories: dict[str, list[dict[str, Any]]],
     channel_ids: dict[str, str],
 ) -> dict[str, LiveSlackFileMatch]:
@@ -102,7 +114,7 @@ def _build_live_file_matches(
 
     for file_name, channel_name in _primary_file_channel_map().items():
         expected_title = titles_by_file.get(file_name)
-        for message in histories[channel_name]:
+        for message in histories.get(channel_name, []):
             for file_payload in list(message.get("files", [])):
                 live_name = str(file_payload.get("name") or "")
                 live_title = str(file_payload.get("title") or "")
@@ -110,13 +122,15 @@ def _build_live_file_matches(
                     continue
 
                 slack_ts = str(message.get("ts") or "")
+                channel_id = channel_ids[channel_name]
+                source_url = _message_permalink(client, channel_id=channel_id, slack_ts=slack_ts)
                 matches[file_name] = LiveSlackFileMatch(
-                    channel_id=channel_ids[channel_name],
+                    channel_id=channel_id,
                     channel_name=channel_name,
                     slack_file_id=str(file_payload.get("id") or ""),
                     slack_ts=slack_ts,
                     posted_at=_slack_ts_to_datetime(slack_ts),
-                    source_url=str(file_payload.get("permalink") or "") or None,
+                    source_url=source_url or str(file_payload.get("permalink") or "") or None,
                 )
                 break
             if file_name in matches:
@@ -160,7 +174,7 @@ def build_live_demo_datasets(client: WebClient, sample_data_dir: Path, recent_li
     required_channels = set(_primary_file_channel_map().values()) | set(_primary_message_channel_map().values())
     channel_ids = _resolve_channel_ids(client, required_channels)
     histories = _fetch_channel_histories(client, channel_ids, recent_limit)
-    file_matches = _build_live_file_matches(histories, channel_ids)
+    file_matches = _build_live_file_matches(client, histories, channel_ids)
     message_matches = _build_live_message_matches(client, histories, channel_ids)
 
     unresolved_files: list[str] = []

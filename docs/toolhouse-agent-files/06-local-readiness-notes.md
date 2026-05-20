@@ -6,12 +6,14 @@ Upload this file when Toolhouse Agent Builder asks for local readiness notes.
 
 The CRE Knowledge Engine backend is ready for a bounded Toolhouse worker integration.
 
+The remaining operator-sensitive step is refreshing the hosted Toolhouse website configuration so the worker uses the current system prompt and Agent Files instead of stale website copies.
+
 Toolhouse should act as the deeper-analysis worker. The local backend remains the source of truth for Slack intake, queued jobs, Postgres evidence, deterministic retrieval, citation validation, and final Slack posting.
 
 ## Date And Demo Context
 
-- Current readiness date: 2026-05-19.
-- Demo reference date for availability parsing: 2026-05-17.
+- Current readiness date: 2026-05-20.
+- Demo reference date for availability parsing: 2026-05-20.
 - Slack request mode: HTTP Events API / interactivity, not Socket Mode.
 - Slack `Look deeper` behavior: backend ACKs immediately, queues work, validates the agent response, then posts to the original thread.
 - Slack `/force-agent` behavior: backend queues Toolhouse directly, still persists a replayable query package, and validates citations before posting.
@@ -43,16 +45,20 @@ Implemented tools:
 - `rank_properties(filters, objective, keywords, query_id)`: ranks structured property matches for objectives like logistics fit, cheapest, largest, available soon, or balanced review.
 - `get_property_timeline(property_ref, query_id)`: traces one address/property/duplicate group across source history and can attach query evidence IDs.
 - `find_property_conflicts(filters, query_id, limit)`: finds duplicate property groups with conflicting size, rent, or availability and can expand query evidence for those records.
-- `search_properties(filters)`: deterministic structured property retrieval over normalized Postgres records.
+- `search_properties(filters)`: deterministic structured property retrieval over normalized Postgres records, including explicit location, sale-price, cap-rate, and infrastructure filters.
 - `get_source_detail(source_id)`: source metadata, chunks, and property rows for a source document.
 - `aggregate_properties(filters, group_by, metrics)`: backend-computed counts, square-footage totals, average square footage, average rent, and min/max rent by optional group.
 - `search_source_chunks(query, filters)`: keyword chunk search over source text, raw text, file names, and joined property records.
-- `nearby_properties(origin, radius_miles, filters)`: backend Haversine proximity ranking from coordinates or a known property address.
+- `nearby_properties(origin, radius_miles, filters)`: backend distance ranking from coordinates or a known property address, using PostGIS geography when available and numeric fallback otherwise.
 - `audit_data()`: corpus completeness, missing fields, conflict groups, and Toolhouse readiness state.
 
 Local-only helper:
 
 - `local_deeper_review(query_id)`: deterministic fallback when Toolhouse credentials are missing, transport/parsing fails, or the live worker returns an invalid output contract.
+
+Location-resolution note:
+
+- Backend query packages can already carry location filters resolved from property-record snapshots and, when enabled, Qdrant metadata. This keeps location-aware filtering usable even when vector services are disabled.
 
 ## Toolhouse Worker API Connection
 
@@ -144,7 +150,7 @@ Validated behavior includes:
 - Toolhouse streaming response parsing.
 - live Toolhouse smoke command: `uv run cre-cli toolhouse-smoke`.
 
-Current full suite:
+Latest known full suite:
 
 ```bash
 uv run pytest -q
@@ -152,26 +158,35 @@ uv run pytest -q
 
 Current result: tests pass with no known failures or warning noise.
 
-Latest full-suite count after ThreadSession, follow-up modal, suggested follow-up work, cached answer-task suggestions, refresh, and modal exclusivity updates: 118 tests passing.
+Latest known full-suite count after the rich-corpus, PostGIS, broader instant/hybrid query-class, and Toolhouse surface updates: 138 tests passing.
 
-Latest focused Toolhouse/MCP count after coordinator pass: 20 tests passing.
+Latest focused runtime-facing Toolhouse/MCP count after upload-surface hardening: 17 tests passing.
 
 Latest live Toolhouse smoke:
 
-- command: `uv run cre-cli toolhouse-smoke`;
-- status: `answered`;
-- Toolhouse fallback: `false`;
-- validation: valid, with no invalid evidence IDs and no schema errors;
-- evidence: 4 allowed IDs and 4 cited IDs.
+- command: `uv run cre-cli toolhouse-smoke "Show properties with cap rate over 5.5%."`;
+- live Slack/Qdrant corpus was restored first with `sync-slack-demo-sources` and `sync-slack-history --reindex`;
+- backend validation: valid, with no invalid evidence IDs and no schema errors;
+- evidence: 5 allowed IDs and 3 cited IDs;
+- current hosted-worker issue: Toolhouse returned `parse_error: empty_response`, so the backend used `local_deeper_review` fallback;
+- next operator step: upload the refreshed system prompt and Agent Files, then rerun the smoke until `toolhouse_fallback=false` again.
+
+Recent live behavior notes after website refresh:
+
+- Strong CRE tenant-fit queries can now complete through hosted Toolhouse with `toolhouse_fallback=false` and valid citations.
+- Off-topic factual prompts such as weather questions were correctly declined as unsupported by backend evidence.
+- A purely creative off-topic prompt still produced a haiku with citations, which indicates the hosted prompt should be tightened to decline non-CRE creative requests instead of answering them.
+- Explicit market-analysis prompts over demo corpus data were conservative and correctly labeled backend data as synthetic/demo rather than claiming a real live market read.
 
 ## Still Required Before Live Demo Use
 
 Remaining operator steps:
 
-1. Keep the FastAPI backend running on `CRE_PORT`.
-2. Keep the HTTP/2 Cloudflare tunnel running from the user config.
-3. Keep local fallback enabled until live Slack runs are stable.
-4. Reuse backend citation validation before Slack posting.
+1. Upload the refreshed Toolhouse system prompt and Agent Files to the website.
+2. Keep the FastAPI backend running on `CRE_PORT`.
+3. Keep the HTTP/2 Cloudflare tunnel running from the user config.
+4. Keep local fallback enabled until live Slack runs are stable.
+5. Reuse backend citation validation before Slack posting.
 
 ## Deliberately Deferred
 

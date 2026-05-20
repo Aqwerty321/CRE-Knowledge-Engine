@@ -57,6 +57,18 @@ class FakeToolhouseClient:
         )
 
 
+class SequencedFakeToolhouseClient:
+    def __init__(self, responses: list[ToolhouseRunResult]) -> None:
+        self._responses = list(responses)
+        self.calls: list[dict[str, str | None]] = []
+
+    async def send_message(self, message: str, *, run_id: str | None = None) -> ToolhouseRunResult:
+        assert "Use CRE Backend MCP first" in message
+        self.calls.append({"message": message, "run_id": run_id})
+        assert self._responses
+        return self._responses.pop(0)
+
+
 def _ensure_schema() -> None:
     command.upgrade(Config("alembic.ini"), "head")
 
@@ -69,7 +81,7 @@ async def _prepare_database() -> None:
             await session.execute(delete(AgentRun))
             await session.execute(delete(Query))
             await session.execute(delete(SourceDocument))
-    await import_sample_data(Path("sample-data"))
+    await import_sample_data(Path("sample-data"), include_generated=False)
 
 
 async def _load_agent_run(agent_run_id: str) -> AgentRun | None:
@@ -178,7 +190,17 @@ def test_toolhouse_tools_are_evidence_bound_and_query_constructor_ready(
     assert chunk_payload["result_count"] >= 1
     assert nearby_payload["status"] == "ok"
     assert nearby_payload["result_count"] >= 1
+    assert nearby_payload["spatial_backend"]["status"] in {"ready", "numeric_fallback", "unavailable"}
     assert schema_payload["status"] == "ok"
+    assert schema_payload["property_filters"]["dock_doors_gte"] == "integer minimum dock/loading door count"
+    assert "property-record snapshots" in schema_payload["property_filters"]["locations"]
+    assert "cap_rate_desc" in schema_payload["property_filters"]["sort"]
+    assert schema_payload["geospatial"]["fallback"].startswith("geo_lat")
+    assert schema_payload["location_resolution"]["backend_query_packages"].startswith("When Toolhouse starts from a backend query package")
+    assert "country_codes" in schema_payload["qdrant_payload"]["rich_metadata"]
+    assert "state_provinces" in schema_payload["qdrant_payload"]["rich_metadata"]
+    assert "geo_points" in schema_payload["qdrant_payload"]["rich_metadata"]
+    assert any(example["filters"].get("cap_rate_gte") == "0.06" for example in schema_payload["safe_examples"] if example["tool"] == "search_properties")
     assert "expand_query_evidence" in {tool["name"] for tool in schema_payload["available_backend_mcp_tools"]}
     assert "rank_properties" in {tool["name"] for tool in schema_payload["available_backend_mcp_tools"]}
     assert context_payload["status"] == "ok"
@@ -307,6 +329,83 @@ def test_toolhouse_deeper_review_accepts_valid_agent_citations(
     assert agent_run.cited_evidence_ids_json == [evidence_id]
     assert agent_run.response_payload_json["rendered_answer"] == "Toolhouse-backed answer."
     assert agent_run.rendered_answer == "Toolhouse-backed answer."
+
+
+@pytest.mark.golden
+def test_toolhouse_deeper_review_retries_empty_response_once(
+    prepared_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    answer_payload = async_runner.run(answer_query("Show industrial listings over 30k SF under $25/SF."))
+    client = SequencedFakeToolhouseClient(
+        [
+            ToolhouseRunResult(
+                agent_id="fake-agent",
+                run_id="fake-run",
+                raw_response="",
+                response_payload=None,
+                parse_error="empty_response",
+            ),
+            ToolhouseRunResult(
+                agent_id="fake-agent",
+                run_id="fake-run",
+                raw_response=json.dumps(
+                    {
+                        "status": "needs_more_evidence",
+                        "rendered_answer": "Need one more backend evidence pass before answering.",
+                        "cited_evidence_ids": [],
+                        "confidence_label": "low",
+                        "reasoning_summary": "The first Toolhouse body was empty, but the retry returned a valid JSON response.",
+                        "mcp_tools_used": ["explain_evidence"],
+                        "toolhouse_integrations_used": [],
+                        "slack_tools_used": [],
+                        "external_sources_consulted": [],
+                        "unsupported_claims_dropped": [],
+                        "missing_data": ["Additional backend evidence for a stronger answer."],
+                        "suggested_followups": [],
+                    }
+                ),
+                response_payload={
+                    "status": "needs_more_evidence",
+                    "rendered_answer": "Need one more backend evidence pass before answering.",
+                    "cited_evidence_ids": [],
+                    "confidence_label": "low",
+                    "reasoning_summary": "The first Toolhouse body was empty, but the retry returned a valid JSON response.",
+                    "mcp_tools_used": ["explain_evidence"],
+                    "toolhouse_integrations_used": [],
+                    "slack_tools_used": [],
+                    "external_sources_consulted": [],
+                    "unsupported_claims_dropped": [],
+                    "missing_data": ["Additional backend evidence for a stronger answer."],
+                    "suggested_followups": [],
+                },
+            ),
+        ]
+    )
+
+    deeper_payload = async_runner.run(
+        run_toolhouse_deeper_review(
+            str(answer_payload["query_id"]),
+            client=client,
+        )
+    )
+
+    assert deeper_payload["status"] == "needs_more_evidence"
+    assert deeper_payload.get("toolhouse_fallback", False) is False
+    assert deeper_payload["validation"]["valid"] is True
+    assert deeper_payload["dependency_state"]["toolhouse"] is True
+    assert deeper_payload["dependency_state"]["toolhouse_empty_response_retry"] is True
+    assert len(client.calls) == 2
+    assert client.calls[0]["run_id"] is None
+    assert client.calls[1]["run_id"] == "fake-run"
+
+    agent_run = async_runner.run(_load_agent_run(str(deeper_payload["agent_run_id"])))
+
+    assert agent_run is not None
+    assert agent_run.provider == "toolhouse"
+    assert agent_run.toolhouse_run_id == "fake-run"
+    assert agent_run.validation_json["valid"] is True
+    assert agent_run.response_payload_json["status"] == "needs_more_evidence"
 
 
 def test_validate_agent_response_rejects_answer_without_citations() -> None:

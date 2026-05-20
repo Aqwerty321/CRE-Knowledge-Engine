@@ -63,6 +63,12 @@ CLI commands:
 - import live Slack metadata into the evidence model: `uv run cre-cli sync-slack-demo-sources`
 - backfill a real configured channel: `uv run cre-cli sync-slack-channel-history --channel-id C123 --channel-name cre-listings --recent-limit 100`
 
+Regenerate the large CSV shard set before seeding if needed:
+
+```bash
+uv run cre-cli build-large-corpus --rows 2400 --seed 20260519
+```
+
 ### Seed `#cre-listings`
 
 - `main-street-office-flyer.pdf`
@@ -71,6 +77,8 @@ CLI commands:
 - `industrial-availability.csv`
 - `slack-field-notes.txt`
 - `source-corrections.csv`
+- `global-cre-corpus-us-1.csv`
+- `global-cre-corpus-us-2.csv`
 
 ### Seed `#cre-market-research`
 
@@ -78,6 +86,8 @@ CLI commands:
 - `market-street-retail-brief.pdf`
 - `tenant-requirements-summary.txt`
 - `broker-availability-tracker.xlsx`
+- `global-cre-corpus-europe-1.csv`
+- `global-cre-corpus-europe-2.csv`
 
 ### Seed `#cre-private-demo`
 

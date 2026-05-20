@@ -3,7 +3,7 @@
   "$id": "https://cre-knowledge-engine.local/schemas/toolhouse-look-deeper-output.schema.json",
   "title": "CRE MCP Look Deeper Analyst Output",
   "type": "object",
-  "description": "Primary output schema for look_deeper, force_agent, and follow_up_agent answer tasks. For task=suggest_followups, use $defs.suggest_followups_output instead.",
+  "description": "Primary output schema for look_deeper, force_agent, and follow_up_agent answer tasks. Return exactly one non-empty JSON object. For task=suggest_followups, use $defs.suggest_followups_output instead.",
   "$defs": {
     "modal_followup_candidate": {
       "type": "object",

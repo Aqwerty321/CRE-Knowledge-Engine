@@ -89,6 +89,29 @@ class SlackGateway:
         )
         return dict(response.data)
 
+    async def upload_content_file(
+        self,
+        *,
+        channel_id: str,
+        content: str,
+        filename: str,
+        title: str,
+        thread_ts: str | None = None,
+        initial_comment: str | None = None,
+    ) -> dict[str, Any]:
+        if self.client is None:
+            return {"ok": False, "delivery": "skipped", "file_id": "", "thread_ts": thread_ts or ""}
+
+        response = await self.client.files_upload_v2(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            content=content,
+            filename=filename,
+            title=title,
+            initial_comment=initial_comment,
+        )
+        return dict(response.data)
+
     async def open_modal(
         self,
         *,
@@ -127,6 +150,7 @@ class RecordingSlackGateway(SlackGateway):
     thread_replies: list[dict[str, Any]] = field(default_factory=list)
     ephemeral_replies: list[dict[str, Any]] = field(default_factory=list)
     updated_messages: list[dict[str, Any]] = field(default_factory=list)
+    uploaded_files: list[dict[str, Any]] = field(default_factory=list)
     opened_modals: list[dict[str, Any]] = field(default_factory=list)
     updated_modals: list[dict[str, Any]] = field(default_factory=list)
 
@@ -201,6 +225,28 @@ class RecordingSlackGateway(SlackGateway):
                 self.updated_messages.append({"channel_id": channel_id, "ts": message_ts, "text": text, "blocks": blocks or []})
                 return {"ok": True, **payload}
         raise ValueError(f"message not found for update: {channel_id} {message_ts}")
+
+    async def upload_content_file(
+        self,
+        *,
+        channel_id: str,
+        content: str,
+        filename: str,
+        title: str,
+        thread_ts: str | None = None,
+        initial_comment: str | None = None,
+    ) -> dict[str, Any]:
+        payload = {
+            "channel_id": channel_id,
+            "thread_ts": thread_ts or "",
+            "content": content,
+            "filename": filename,
+            "title": title,
+            "initial_comment": initial_comment,
+            "file": {"id": f"F_TEST_{len(self.uploaded_files) + 1}", "name": filename, "title": title},
+        }
+        self.uploaded_files.append(payload)
+        return {"ok": True, **payload}
 
     async def open_modal(
         self,

@@ -36,6 +36,9 @@ MCP_INSTRUCTIONS = """
 CRE Backend MCP is the evidence, retrieval, and controlled evidence-expansion surface for the CRE MCP Look Deeper Analyst.
 Use these tools for all CRE facts, source details, query explanation, aggregation, chunk search, proximity, audit state, and citation grounding.
 Use expand_query_evidence when a useful backend result needs a citable evidence ID for the current query.
+Use nearby_properties for map, radius, coordinate, or distance-ranked questions; the backend uses PostGIS geography when available and numeric coordinate fallback otherwise.
+Use search_properties, aggregate_properties, summarize_inventory, and explain_query for investment-style questions involving sale price, cap rate, or location filters.
+Pass explicit `locations` filters for country, region, state, city, locality, neighborhood, submarket, postal code, or market screens; backend query packages may already include location filters resolved from property records even when vector services are disabled.
 Never treat Toolhouse memory, Slack search, web search, scraping, downloaded files, or vision output as final CRE evidence unless backend MCP evidence also supports it.
 """.strip()
 

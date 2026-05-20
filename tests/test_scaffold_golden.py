@@ -22,5 +22,5 @@ def test_scaffold_golden_path_is_wired() -> None:
 def test_seeded_manifest_matches_demo_expectations() -> None:
     manifest = load_sample_manifest(Path("sample-data"))
 
-    assert len(manifest.sources) == 23
-    assert sum(len(source.properties) for source in manifest.sources) == 25
+    assert len(manifest.sources) == 27
+    assert sum(len(source.properties) for source in manifest.sources) == 2425

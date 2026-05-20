@@ -61,6 +61,38 @@ def _matches_loading_access_concept(query_text: str) -> bool:
     return AliasExpander(config).matches_concept(query_text, LOADING_ACCESS_CONCEPT)
 
 
+def _prefer_structured_plan(structured_spec: object | None) -> bool:
+    if structured_spec is None:
+        return False
+
+    return any(
+        [
+            bool(getattr(structured_spec, "address_terms", [])),
+            bool(getattr(structured_spec, "markets", [])),
+            bool(getattr(structured_spec, "locations", [])),
+            bool(getattr(structured_spec, "statuses", [])),
+            bool(getattr(structured_spec, "usage_types", [])),
+            bool(getattr(structured_spec, "facing", [])),
+            bool(getattr(structured_spec, "furnishing_statuses", [])),
+            getattr(structured_spec, "price_per_sq_ft_lt", None) is not None,
+            getattr(structured_spec, "price_per_sq_ft_gt", None) is not None,
+            getattr(structured_spec, "sale_price_lt", None) is not None,
+            getattr(structured_spec, "sale_price_gt", None) is not None,
+            getattr(structured_spec, "cap_rate_gte", None) is not None,
+            getattr(structured_spec, "cap_rate_lte", None) is not None,
+            getattr(structured_spec, "sq_ft_gte", None) is not None,
+            getattr(structured_spec, "sq_ft_lte", None) is not None,
+            getattr(structured_spec, "clear_height_ft_gte", None) is not None,
+            getattr(structured_spec, "dock_doors_gte", None) is not None,
+            getattr(structured_spec, "trailer_parking_spaces_gte", None) is not None,
+            getattr(structured_spec, "parking_spaces_gte", None) is not None,
+            bool(getattr(structured_spec, "requires_coordinates", False)),
+            getattr(structured_spec, "aggregate", None) is not None,
+            getattr(structured_spec, "sort", None) is not None,
+        ]
+    )
+
+
 def build_query_plan(query_text: str) -> QueryPlan:
     normalized = _normalize_text(query_text)
 
@@ -156,6 +188,15 @@ def build_query_plan(query_text: str) -> QueryPlan:
 
     structured_spec = build_structured_query_spec(query_text)
     if structured_spec is not None and structured_spec.intent == "tenant_fit":
+        return QueryPlan(
+            route_mode=structured_spec.route_mode,
+            query_type=f"generic_{structured_spec.intent}",
+            route_confidence=structured_spec.route_confidence,
+            reason_codes=structured_spec.reason_codes,
+            filters=structured_spec.to_filters(),
+        )
+
+    if structured_spec is not None and _prefer_structured_plan(structured_spec):
         return QueryPlan(
             route_mode=structured_spec.route_mode,
             query_type=f"generic_{structured_spec.intent}",

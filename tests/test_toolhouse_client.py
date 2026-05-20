@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.toolhouse.client import build_toolhouse_message, parse_toolhouse_response_payload
+from app.toolhouse.client import build_toolhouse_message, is_acceptable_live_toolhouse_outcome, parse_toolhouse_response_payload
 
 
 def test_parse_toolhouse_response_payload_accepts_plain_json() -> None:
@@ -83,3 +83,34 @@ def test_build_toolhouse_message_marks_follow_up_agent_task() -> None:
     assert "recommended MCP calls" in message
     assert "follow_up_suggestion_context" in message
     assert "What's the rent spread for the current set?" in message
+
+
+def test_is_acceptable_live_toolhouse_outcome_accepts_safe_hosted_statuses() -> None:
+    for status in ["answered", "needs_more_evidence", "external_context_only", "validation_risk"]:
+        assert is_acceptable_live_toolhouse_outcome(
+            {
+                "status": status,
+                "toolhouse_fallback": False,
+                "dependency_state": {"toolhouse": True},
+                "validation": {"valid": True},
+            }
+        )
+
+
+def test_is_acceptable_live_toolhouse_outcome_rejects_fallback_and_invalid_states() -> None:
+    assert not is_acceptable_live_toolhouse_outcome(
+        {
+            "status": "answered",
+            "toolhouse_fallback": True,
+            "dependency_state": {"toolhouse": False},
+            "validation": {"valid": True},
+        }
+    )
+    assert not is_acceptable_live_toolhouse_outcome(
+        {
+            "status": "mcp_unavailable",
+            "toolhouse_fallback": False,
+            "dependency_state": {"toolhouse": True},
+            "validation": {"valid": True},
+        }
+    )

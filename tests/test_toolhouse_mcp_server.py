@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.config import get_settings
 from app.main import create_app
-from app.toolhouse.mcp_server import create_cre_mcp_server, create_mcp_asgi_app
+from app.toolhouse.mcp_server import MCP_INSTRUCTIONS, create_cre_mcp_server, create_mcp_asgi_app
 
 
 def test_cre_mcp_server_registers_expected_tools() -> None:
@@ -86,3 +86,9 @@ def test_mounted_mcp_app_allows_configured_public_host(monkeypatch) -> None:
 
     get_settings.cache_clear()
     assert response.status_code not in {401, 421, 500, 503}
+
+
+def test_mcp_instructions_surface_cap_rate_and_location_guidance() -> None:
+    assert "cap rate" in MCP_INSTRUCTIONS
+    assert "locations" in MCP_INSTRUCTIONS
+    assert "vector services are disabled" in MCP_INSTRUCTIONS

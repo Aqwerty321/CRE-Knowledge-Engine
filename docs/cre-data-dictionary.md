@@ -28,7 +28,7 @@ Represents a Slack message, thread reply, PDF, CSV, XLSX, or text file.
 | `slack_file_id` | text | File ID when applicable. |
 | `file_name` | text | Original filename. |
 | `file_mime_type` | text | MIME type from Slack. |
-| `source_url` | text | Slack permalink or file URL. |
+| `source_url` | text | Prefer Slack message permalink for shared files/messages; file URL only as fallback. |
 | `local_path` | text | Local stored copy or object key. |
 | `raw_text` | text | Extracted full text when available. |
 | `raw_payload_hash` | text | Dedupe and replay. |
@@ -72,15 +72,80 @@ Represents normalized CRE facts extracted from one source.
 | `chunk_id` | UUID | Best supporting chunk if available. |
 | `address` | text | Display address as extracted. |
 | `normalized_address` | text | Canonical comparison value. |
-| `property_type` | enum | `office`, `industrial`, `retail`, `mixed_use`, `land`, `multifamily`, `unknown`. |
+| `property_name` | text | Listing or building name when available. |
+| `listing_id` | text | Source listing ID or generated shard ID. |
+| `source_dataset` | text | Dataset or corpus shard identifier. |
+| `property_type` | enum | `office`, `industrial`, `retail`, `mixed_use`, `land`, `multifamily`, `hospitality`, `medical`, `data_center`, `self_storage`, `parking`, `unknown`. |
+| `property_subtype` | text | Example: `warehouse`, `last_mile`, `creative`, `high_street`, `build_to_rent`. |
+| `asset_class` | text | Broader category when different from property type. |
+| `usage_type` | text | Example: `office`, `logistics`, `retail`, `residential`, `hospitality`, `development`. |
+| `status` | text | Example: `available`, `coming_soon`, `under_offer`, `leased`, `sold`, `pipeline`, `withdrawn`. |
+| `status_date` | date | Date associated with the current status. |
 | `sq_ft` | integer | Whole square feet. |
+| `building_area_sq_ft` | integer | Building gross area when available. |
+| `leasable_area_sq_ft` | integer | Rentable/leasable area when distinct from `sq_ft`. |
+| `lot_size_sq_ft` | integer | Site area in square feet. |
+| `lot_size_acres` | numeric | Site area in acres. |
+| `year_built` | integer | Built year. |
+| `year_renovated` | integer | Renovation year. |
+| `clear_height_ft` | numeric | Industrial clear height. |
+| `dock_doors` | integer | Dock-high door count. |
+| `drive_in_doors` | integer | Drive-in or grade-level door count. |
+| `truck_court_depth_ft` | numeric | Truck court depth. |
+| `trailer_parking_spaces` | integer | Trailer parking count. |
+| `parking_spaces` | integer | General parking count. |
+| `facing` | text | Orientation/frontage such as `north`, `street_front`, `corner`, `dual_aspect`. |
+| `furnishing_status` | text | Example: `furnished`, `unfurnished`, `shell`, `warm_shell`, `turnkey`. |
 | `price_per_sq_ft` | numeric | Asking rent or price per square foot. |
 | `price_basis` | enum | `annual_rent`, `monthly_rent`, `sale_price`, `unknown`. |
+| `asking_rent` | numeric | Asking rent when supplied separately from normalized PSF. |
+| `asking_rent_period` | text | Rent period or unit. |
+| `rent_currency` | text | Currency code for rent. |
+| `sale_price` | numeric | Sale price when applicable. |
+| `price_currency` | text | Currency code for sale price. |
+| `lease_type` | text | Example: `NNN`, `gross`, `modified_gross`. |
 | `availability` | text | Display label. |
 | `availability_date` | date | Normalized date when known. |
+| `available_from` | date | Availability start date; defaults to `availability_date` for imported sample rows. |
+| `vacancy_status` | text | Vacancy/occupancy label from the source. |
+| `occupancy_status` | text | Occupancy label when distinct from vacancy. |
 | `market` | text | Market or submarket. |
+| `country_code` | text | ISO-style country code when known. |
+| `country` | text | Country display name. |
+| `region` | text | Region, state grouping, or macro-market. |
+| `state_province` | text | State, province, county, or administrative area. |
+| `county_district` | text | County, borough, district, or local authority. |
+| `city` | text | City. |
+| `locality` | text | Locality or borough. |
+| `neighborhood` | text | Neighborhood. |
+| `submarket` | text | CRE submarket. |
+| `postal_code` | text | Postal or ZIP code. |
 | `geo_lat` | numeric | Seeded or geocoded latitude. |
 | `geo_lng` | numeric | Seeded or geocoded longitude. |
+| `geo_point` | geography(Point,4326) | Optional PostGIS point synced from `geo_lng`/`geo_lat` when the database supports PostGIS. |
+| `geocode_source` | text | Source of coordinate assignment. |
+| `geocode_confidence` | numeric | 0.0 to 1.0 confidence for geocode. |
+| `map_url` | text | Map/search link for the coordinates when available. |
+| `loading_access` | text | Dock, grade-level, yard, or loading description. |
+| `yard_area_sq_ft` | integer | Yard area when available. |
+| `cold_storage` | boolean | Cold-storage flag. |
+| `sprinklered` | boolean | Sprinkler flag. |
+| `hvac_type` | text | HVAC notes. |
+| `nearest_highway` | text | Nearby highway/road access. |
+| `highway_distance_miles` | numeric | Highway distance. |
+| `airport_distance_miles` | numeric | Airport distance. |
+| `port_distance_miles` | numeric | Port distance. |
+| `rail_access` | text | Rail/freight access note. |
+| `public_transit_notes` | text | Transit access note. |
+| `transit_score` | integer | Numeric transit score if supplied. |
+| `ev_charging` | boolean | EV charging flag. |
+| `fiber_available` | boolean | Fiber availability flag. |
+| `additional_information` | text | Free-form remarks/comments captured during ingestion. |
+| `amenities_json` | jsonb | Structured amenities not promoted to columns. |
+| `infrastructure_json` | jsonb | Structured infrastructure not promoted to columns. |
+| `financials_json` | jsonb | Structured financial details not promoted to columns. |
+| `tags_json` | jsonb | Tags or labels for filtering/ranking. |
+| `source_metadata_json` | jsonb | Dataset provenance, generated-corpus flags, unknown source columns. |
 | `source_page` | integer | PDF page. |
 | `source_row` | integer | CSV/XLSX row. |
 | `extraction_method` | enum | `deterministic`, `heuristic`, `semantic`, `manual_seed`. |
@@ -223,6 +288,11 @@ Canonical values:
 - `mixed_use`;
 - `land`;
 - `multifamily`;
+- `hospitality`;
+- `medical`;
+- `data_center`;
+- `self_storage`;
+- `parking`;
 - `unknown`.
 
 Examples:
@@ -248,6 +318,19 @@ Examples:
 - Normalize direct dates when available.
 - Map `available now`, `immediate`, and `vacant` to the current demo date if date math is needed, while keeping display label intact.
 - Normalize quarter labels such as `Q3 2026` to a representative date only for sorting, not for exact claims.
+
+### Location And Maps
+
+- Store explicit coordinates in `geo_lat` and `geo_lng` when supplied by a source, generated corpus shard, or later geocoder.
+- In PostGIS-capable Postgres deployments, Alembic creates and indexes `geo_point` for geography-aware distance queries. In SQLite or non-PostGIS deployments, the app keeps using numeric coordinate fallback.
+- Store `geocode_source` and `geocode_confidence` so generated/demo coordinates are distinguishable from externally verified geocodes.
+- Store `map_url` as a convenience link for UI and Slack source inspection, not as independent factual evidence.
+
+### Additional Information
+
+- Map source columns such as `remarks`, `comments`, `notes`, and `additional_information` into the `additional_information` column.
+- Preserve unknown but non-empty source columns in `source_metadata_json.unknown_columns` rather than dropping them.
+- Use `amenities_json`, `infrastructure_json`, `financials_json`, and `tags_json` for structured details that do not yet justify first-class columns.
 
 ## Deduplication Rules
 

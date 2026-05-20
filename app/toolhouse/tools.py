@@ -7,19 +7,93 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import String, func, or_, select
+from sqlalchemy import String, bindparam, func, or_, select, text
 
 from app.answering.query_service import explain_query
 from app.db.session import SessionFactory
 from app.indexing import search_vector_chunks
 from app.models import AnswerSnapshot, Chunk, EvidenceItem, PropertyRecord, Query, SourceDocument
 from app.retrieval import build_property_query, collect_data_quality_report, describe_query_constructor, retrieve_structured_property_matches
+from app.retrieval.spatial import get_postgis_status
 from app.toolhouse.evidence_context import build_backend_schema_context
 from app.toolhouse.local_agent import build_escalation_payload, run_local_deeper_review
 
 
 def _serialize_decimal(value: Decimal | None) -> str | None:
     return None if value is None else format(value, "f")
+
+
+SERIALIZED_RICH_PROPERTY_FIELDS = [
+    "property_name",
+    "listing_id",
+    "source_dataset",
+    "property_subtype",
+    "asset_class",
+    "usage_type",
+    "status",
+    "status_date",
+    "building_area_sq_ft",
+    "leasable_area_sq_ft",
+    "lot_size_sq_ft",
+    "lot_size_acres",
+    "year_built",
+    "year_renovated",
+    "clear_height_ft",
+    "dock_doors",
+    "drive_in_doors",
+    "truck_court_depth_ft",
+    "trailer_parking_spaces",
+    "parking_spaces",
+    "facing",
+    "furnishing_status",
+    "asking_rent",
+    "asking_rent_period",
+    "rent_currency",
+    "sale_price",
+    "price_currency",
+    "lease_type",
+    "available_from",
+    "vacancy_status",
+    "country_code",
+    "country",
+    "region",
+    "state_province",
+    "city",
+    "locality",
+    "neighborhood",
+    "submarket",
+    "postal_code",
+    "geocode_source",
+    "geocode_confidence",
+    "map_url",
+    "loading_access",
+    "yard_area_sq_ft",
+    "cold_storage",
+    "sprinklered",
+    "hvac_type",
+    "nearest_highway",
+    "highway_distance_miles",
+    "airport_distance_miles",
+    "port_distance_miles",
+    "rail_access",
+    "transit_score",
+    "ev_charging",
+    "fiber_available",
+    "additional_information",
+    "amenities_json",
+    "infrastructure_json",
+    "financials_json",
+    "tags_json",
+    "source_metadata_json",
+]
+
+
+def _serialize_property_value(value: object) -> object:
+    if isinstance(value, Decimal):
+        return _serialize_decimal(value)
+    if isinstance(value, date):
+        return value.isoformat()
+    return value
 
 
 def _serialize_source_document(source_document: SourceDocument | None) -> dict[str, object] | None:
@@ -40,7 +114,7 @@ def _serialize_source_document(source_document: SourceDocument | None) -> dict[s
 def _serialize_property_record(property_record: PropertyRecord | None) -> dict[str, object] | None:
     if property_record is None:
         return None
-    return {
+    payload: dict[str, object] = {
         "id": str(property_record.id),
         "address": property_record.address,
         "normalized_address": property_record.normalized_address,
@@ -61,6 +135,9 @@ def _serialize_property_record(property_record: PropertyRecord | None) -> dict[s
         "freshness_score": _serialize_decimal(property_record.freshness_score),
         "duplicate_group_key": property_record.duplicate_group_key,
     }
+    for field_name in SERIALIZED_RICH_PROPERTY_FIELDS:
+        payload[field_name] = _serialize_property_value(getattr(property_record, field_name))
+    return payload
 
 
 def _serialize_chunk(chunk: Chunk | None) -> dict[str, object] | None:
@@ -976,6 +1053,55 @@ async def _resolve_origin(origin: object) -> dict[str, object] | None:
     }
 
 
+async def _postgis_distances_miles(
+    session: Any,
+    *,
+    origin_lat: float,
+    origin_lng: float,
+    radius_miles: float,
+    property_ids: list[str],
+) -> tuple[dict[str, float], dict[str, Any]]:
+    status = await get_postgis_status(session)
+    if status.get("status") != "ready" or not property_ids:
+        return {}, status
+
+    statement = text(
+        """
+        SELECT
+            id::text AS property_record_id,
+            ST_Distance(
+                geo_point,
+                ST_SetSRID(ST_MakePoint(:origin_lng, :origin_lat), 4326)::geography
+            ) / 1609.344 AS distance_miles
+        FROM property_records
+        WHERE id::text IN :property_ids
+          AND geo_point IS NOT NULL
+          AND ST_DWithin(
+              geo_point,
+              ST_SetSRID(ST_MakePoint(:origin_lng, :origin_lat), 4326)::geography,
+              :radius_meters
+          )
+        """
+    ).bindparams(bindparam("property_ids", expanding=True))
+    try:
+        result = await session.execute(
+            statement,
+            {
+                "origin_lat": origin_lat,
+                "origin_lng": origin_lng,
+                "radius_meters": radius_miles * 1609.344,
+                "property_ids": property_ids,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - proximity can fall back to numeric coordinates
+        return {}, {**status, "status": "numeric_fallback", "error": str(exc)}
+    return {
+        str(row.property_record_id): float(row.distance_miles)
+        for row in result
+        if row.distance_miles is not None
+    }, status
+
+
 async def nearby_properties_tool(origin: object, radius_miles: float, filters: dict[str, object] | None = None) -> dict[str, Any]:
     filters = filters or {}
     if radius_miles <= 0:
@@ -988,6 +1114,13 @@ async def nearby_properties_tool(origin: object, radius_miles: float, filters: d
     async with SessionFactory() as session:
         statement = build_property_query(filters).where(PropertyRecord.geo_lat.is_not(None), PropertyRecord.geo_lng.is_not(None))
         rows = _dedupe_property_rows(list((await session.execute(statement)).all()))
+        postgis_distances, postgis_status = await _postgis_distances_miles(
+            session,
+            origin_lat=float(resolved_origin["lat"]),
+            origin_lng=float(resolved_origin["lng"]),
+            radius_miles=radius_miles,
+            property_ids=[str(property_record.id) for property_record, _source_document, _chunk in rows],
+        )
 
     results: list[dict[str, object]] = []
     origin_duplicate_key = resolved_origin.get("duplicate_group_key")
@@ -998,12 +1131,16 @@ async def nearby_properties_tool(origin: object, radius_miles: float, filters: d
             continue
         if property_record.geo_lat is None or property_record.geo_lng is None:
             continue
-        distance = _distance_miles(
-            float(resolved_origin["lat"]),
-            float(resolved_origin["lng"]),
-            float(property_record.geo_lat),
-            float(property_record.geo_lng),
-        )
+        distance = postgis_distances.get(str(property_record.id))
+        if distance is None:
+            if postgis_status.get("status") == "ready":
+                continue
+            distance = _distance_miles(
+                float(resolved_origin["lat"]),
+                float(resolved_origin["lng"]),
+                float(property_record.geo_lat),
+                float(property_record.geo_lng),
+            )
         if distance > radius_miles:
             continue
         results.append(
@@ -1014,7 +1151,7 @@ async def nearby_properties_tool(origin: object, radius_miles: float, filters: d
                 "chunk": _serialize_chunk(chunk),
                 "matched_fields": ["geo_lat", "geo_lng"],
                 "relevance_score": _bounded_score(1 / (1 + distance)),
-                "selection_reason": "distance-ranked from backend geospatial calculation",
+                "selection_reason": "distance-ranked from PostGIS geography" if postgis_status.get("status") == "ready" else "distance-ranked from numeric coordinate fallback",
             }
         )
 
@@ -1025,6 +1162,7 @@ async def nearby_properties_tool(origin: object, radius_miles: float, filters: d
         "status": "ok",
         "origin": resolved_origin,
         "radius_miles": radius_miles,
+        "spatial_backend": postgis_status,
         "query_constructor": describe_query_constructor(filters),
         "result_count": len(results[:limit]),
         "results": results[:limit],

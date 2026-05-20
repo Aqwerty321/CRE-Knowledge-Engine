@@ -447,6 +447,7 @@ async def ingest_slack_file_checkpoint(checkpoint: dict[str, Any], client: Async
     file_name = str(file_payload.get("name") or file_payload.get("title") or local_path.name)
     mime_type = str(file_payload.get("mimetype") or file_payload.get("filetype") or "") or None
     message_ts = str(checkpoint.get("message_ts") or file_payload.get("created") or "")
+    source_url = await _permalink_for_message(client, channel_id, message_ts)
     source = SampleSourceModel(
         source_id=f"slack-file:{file_id}",
         source_type=_source_type_for_file(file_name, mime_type),
@@ -457,7 +458,7 @@ async def ingest_slack_file_checkpoint(checkpoint: dict[str, Any], client: Async
         slack_file_id=file_id,
         file_name=file_name,
         file_mime_type=mime_type,
-        source_url=_source_url_from_file(file_payload),
+        source_url=source_url or _source_url_from_file(file_payload),
         local_path=str(local_path),
     )
     dataset = SampleDatasetModel(

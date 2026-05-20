@@ -15,7 +15,7 @@ from app.indexing import check_vector_dependencies
 from app.ingestion.quality import collect_ingestion_quality_report
 from app.ingestion.sample_importer import collect_database_counts
 from app.models import AgentRun
-from app.toolhouse import run_toolhouse_deeper_review
+from app.toolhouse import is_acceptable_live_toolhouse_outcome, run_toolhouse_deeper_review
 
 
 @dataclass(frozen=True)
@@ -360,14 +360,7 @@ async def demo_dry_run(*, include_public_callback: bool = False, live_toolhouse:
         else:
             try:
                 deeper_payload = await run_toolhouse_deeper_review(query_id)
-                validation = dict(deeper_payload.get("validation") or {})
-                dependency_state = dict(deeper_payload.get("dependency_state") or {})
-                passed = (
-                    deeper_payload.get("status") == "answered"
-                    and validation.get("valid") is True
-                    and dependency_state.get("toolhouse") is True
-                    and not deeper_payload.get("toolhouse_fallback")
-                )
+                passed = is_acceptable_live_toolhouse_outcome(deeper_payload)
                 toolhouse_step = {
                     "name": "toolhouse_look_deeper",
                     "status": "passed" if passed else "failed",
@@ -376,8 +369,8 @@ async def demo_dry_run(*, include_public_callback: bool = False, live_toolhouse:
                     "agent_run_id": deeper_payload.get("agent_run_id"),
                     "toolhouse_agent_id": deeper_payload.get("toolhouse_agent_id"),
                     "toolhouse_run_id": deeper_payload.get("toolhouse_run_id"),
-                    "validation": validation,
-                    "dependency_state": dependency_state,
+                    "validation": dict(deeper_payload.get("validation") or {}),
+                    "dependency_state": dict(deeper_payload.get("dependency_state") or {}),
                     "fallback": deeper_payload.get("toolhouse_fallback", False),
                     "rendered_answer_preview": _text_preview(deeper_payload.get("rendered_answer")),
                 }
@@ -591,19 +584,14 @@ async def demo_doctor(*, include_public_callback: bool = True, include_toolhouse
             try:
                 answer_payload = await answer_query("Find listings that mention loading access or yard space.")
                 deeper_payload = await run_toolhouse_deeper_review(str(answer_payload["query_id"]))
-                validation = dict(deeper_payload.get("validation") or {})
-                dependency_state = dict(deeper_payload.get("dependency_state") or {})
                 checks.append(
                     _check_status(
                         "toolhouse_smoke",
-                        deeper_payload.get("status") == "answered"
-                        and validation.get("valid") is True
-                        and dependency_state.get("toolhouse") is True
-                        and not deeper_payload.get("toolhouse_fallback"),
+                        is_acceptable_live_toolhouse_outcome(deeper_payload),
                         query_id=deeper_payload.get("query_id"),
                         toolhouse_run_id=deeper_payload.get("toolhouse_run_id"),
-                        validation=validation,
-                        dependency_state=dependency_state,
+                        validation=dict(deeper_payload.get("validation") or {}),
+                        dependency_state=dict(deeper_payload.get("dependency_state") or {}),
                         fallback=deeper_payload.get("toolhouse_fallback", False),
                     )
                 )

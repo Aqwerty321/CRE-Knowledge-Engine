@@ -145,7 +145,7 @@ File metadata and content should be separated:
 - uploader;
 - channels;
 - created timestamp;
-- source URL or permalink;
+- source URL or permalink, preferring the Slack share-message permalink for citations and keeping file permalink as fallback metadata;
 - local path or object storage key;
 - content hash;
 - extraction status.
@@ -196,7 +196,8 @@ File metadata and content should be separated:
 
 1. User clicks `Show sources`.
 2. Backend returns the source list, including file name, page or row, sender, posted date, and Slack link.
-3. Use an ephemeral response or threaded reply depending on Slack support and demo needs.
+3. File-backed citations should open the Slack conversation where the file was shared when `chat_getPermalink` is available; local-only or generated sources should omit fake `demo.local` links and rely on file, page, row, and source summary.
+4. Use an ephemeral response or threaded reply depending on Slack support and demo needs.
 
 ### Broaden Search
 

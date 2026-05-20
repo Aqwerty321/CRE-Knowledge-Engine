@@ -15,6 +15,7 @@ from app.models import IngestionJob
 from app.slack.gateway import SlackGateway
 from app.slack.service import (
     build_answer_blocks,
+    build_comparison_table_csv_attachment,
     build_deeper_review_blocks,
     build_failed_status_blocks,
     build_failed_status_text,
@@ -37,6 +38,43 @@ def _merge_checkpoint_json(existing: dict[str, Any], updates: dict[str, Any]) ->
 
 def _thread_ts_for_checkpoint(checkpoint: dict[str, Any]) -> str:
     return str(checkpoint.get("thread_ts") or checkpoint.get("query_ts") or "")
+
+
+async def _upload_comparison_csv(
+    *,
+    slack_gateway: SlackGateway | None,
+    channel_id: str,
+    thread_ts: str | None,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    if slack_gateway is None or not channel_id:
+        return {"comparison_csv_status": "skipped"}
+
+    attachment = build_comparison_table_csv_attachment(payload)
+    if attachment is None:
+        return {"comparison_csv_status": "absent"}
+
+    try:
+        response = await slack_gateway.upload_content_file(
+            channel_id=channel_id,
+            thread_ts=thread_ts or None,
+            content=attachment["content"],
+            filename=attachment["filename"],
+            title=attachment["title"],
+            initial_comment=f"Attached CSV: {attachment['title']}",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "comparison_csv_status": "failed",
+            "comparison_csv_error": str(exc),
+        }
+
+    file_payload = dict(response.get("file") or {})
+    return {
+        "comparison_csv_status": "uploaded",
+        "comparison_csv_file_id": str(file_payload.get("id") or ""),
+        "comparison_csv_filename": attachment["filename"],
+    }
 
 
 async def _claim_query_job_ids(limit: int) -> list[UUID]:
@@ -200,6 +238,14 @@ async def process_pending_query_jobs(slack_gateway: SlackGateway | None = None, 
                         "delivery_status": "posted",
                         "delivery_ts": response.get("ts"),
                     }
+                    delivery_payload.update(
+                        await _upload_comparison_csv(
+                            slack_gateway=slack_gateway,
+                            channel_id=channel_id,
+                            thread_ts=thread_ts,
+                            payload=follow_up_payload,
+                        )
+                    )
                 updates = {
                     **delivery_payload,
                     "query_id": follow_up_payload["query_id"],
@@ -262,6 +308,14 @@ async def process_pending_query_jobs(slack_gateway: SlackGateway | None = None, 
                         "delivery_status": "posted",
                         "delivery_ts": response.get("ts"),
                     }
+                    delivery_payload.update(
+                        await _upload_comparison_csv(
+                            slack_gateway=slack_gateway,
+                            channel_id=channel_id,
+                            thread_ts=thread_ts,
+                            payload=deeper_payload,
+                        )
+                    )
                 updates = {
                     **delivery_payload,
                     "query_id": deeper_payload["query_id"],
@@ -320,6 +374,14 @@ async def process_pending_query_jobs(slack_gateway: SlackGateway | None = None, 
                         "delivery_status": "posted",
                         "delivery_ts": response.get("ts"),
                     }
+                    delivery_payload.update(
+                        await _upload_comparison_csv(
+                            slack_gateway=slack_gateway,
+                            channel_id=channel_id,
+                            thread_ts=thread_ts,
+                            payload=answer_payload,
+                        )
+                    )
 
                 updates = {
                     **delivery_payload,

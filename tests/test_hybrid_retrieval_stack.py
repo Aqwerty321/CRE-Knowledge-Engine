@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
+import app.routing.query_constructor as query_constructor
+
 from app.retrieval.hybrid_pipeline import LocalHybridRetrievalPipeline
 from app.retrieval.retrieval_config import HybridRetrievalConfig
 from app.retrieval.retrieval_types import RetrievalDocument
@@ -118,3 +120,51 @@ def test_router_uses_alias_config_for_noisy_loading_queries() -> None:
     assert plan.query_type == "loading_access_search"
     assert plan.filters["retrieval_mode"] == "hybrid_lexical_fuzzy"
     assert "hybrid_local_retrieval" in plan.reason_codes
+
+
+def test_router_prefers_structured_plan_when_explicit_numeric_or_geo_filters_exist() -> None:
+    plan = build_query_plan("Show industrial for sale under $8m with at least 4 dock doors and map links")
+
+    assert plan.route_mode == "instant"
+    assert plan.query_type == "generic_property_search"
+    assert plan.filters["sale_price_lt"] == "8000000"
+    assert plan.filters["dock_doors_gte"] == 4
+    assert plan.filters["requires_coordinates"] is True
+
+
+def test_router_prefers_structured_plan_for_expanded_dataset_city_queries() -> None:
+    plan = build_query_plan("Show industrial listings in Atlanta with map links")
+
+    assert plan.route_mode == "instant"
+    assert plan.query_type == "generic_property_search"
+    assert "atlanta" in plan.filters["locations"]
+    assert plan.filters["requires_coordinates"] is True
+
+
+def test_router_expands_macro_region_queries_for_structured_search() -> None:
+    plan = build_query_plan("Show industrial listings in Europe with map links")
+
+    assert plan.route_mode == "instant"
+    assert plan.query_type == "generic_property_search"
+    assert "france" in plan.filters["locations"]
+    assert "germany" in plan.filters["locations"]
+
+
+def test_router_prefers_structured_plan_for_corpus_seed_locations() -> None:
+    plan = build_query_plan("Show office listings in Toronto with map links")
+
+    assert plan.route_mode == "instant"
+    assert plan.query_type == "generic_property_search"
+    assert "toronto" in plan.filters["locations"]
+    assert plan.filters["requires_coordinates"] is True
+
+
+def test_router_prefers_structured_plan_for_live_qdrant_locations(monkeypatch) -> None:
+    monkeypatch.setattr(query_constructor, "_load_live_qdrant_location_values", lambda: {"lisbon", "portugal", "alfama"})
+
+    plan = build_query_plan("Show office listings in Lisbon with map links")
+
+    assert plan.route_mode == "instant"
+    assert plan.query_type == "generic_property_search"
+    assert "lisbon" in plan.filters["locations"]
+    assert plan.filters["requires_coordinates"] is True

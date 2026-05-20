@@ -61,6 +61,12 @@ Current backend wrappers implemented in `app/toolhouse/tools.py`:
 - `nearby_properties`
 - `audit_data`
 
+Important query-planning note for Toolhouse:
+
+- Use explicit structured filters rather than free-form natural language whenever possible.
+- For investment screens, prefer `sale_price_lt`, `sale_price_gt`, `cap_rate_gte`, and `cap_rate_lte` through `search_properties`, `summarize_inventory`, `aggregate_properties`, or `expand_query_evidence`.
+- For geography, pass explicit `locations` values for country, region, state/province, city, locality, neighborhood, submarket, postal code, or market. Backend query packages may already include locations resolved from property records and, when available, Qdrant metadata.
+
 Current local-only helper, useful for tests but not the real Toolhouse worker:
 
 - `local_deeper_review`
@@ -93,9 +99,23 @@ Current local-only helper, useful for tests but not the real Toolhouse worker:
   "property_type": "industrial",
   "sq_ft": 44000,
   "price_per_sq_ft": "21.50",
+  "sale_price": "7200000.00",
+  "cap_rate": "0.0575",
   "availability": "Q2 2026",
   "availability_date": "2026-04-01",
   "market": "Harbor District",
+  "city": "New York",
+  "locality": "West Side",
+  "neighborhood": "Hudson Yards",
+  "status": "available",
+  "usage_type": "logistics",
+  "clear_height_ft": "32.0",
+  "dock_doors": 6,
+  "parking_spaces": 120,
+  "geo_lat": "40.750700",
+  "geo_lng": "-73.996700",
+  "map_url": "https://www.google.com/maps/search/?api=1&query=40.750700,-73.996700",
+  "additional_information": "Broker remarks or comments captured during ingestion.",
   "source_page": null,
   "source_row": 2,
   "source_authority_score": "0.9700",
@@ -523,16 +543,31 @@ Input:
     "address_terms": ["88 foundry ln"],
     "uploader_names": ["Priya"],
     "markets": ["Harbor District"],
+    "locations": ["Atlanta", "London", "Westside"],
+    "statuses": ["available", "coming_soon"],
+    "usage_types": ["logistics"],
+    "facing": ["corner"],
+    "furnishing_statuses": ["turnkey"],
+    "infrastructure_terms": ["loading dock", "highway", "fiber"],
     "keywords": ["loading dock", "yard", "logistics"],
     "price_per_sq_ft_lt": "25",
     "price_per_sq_ft_gt": null,
+    "sale_price_lt": "5000000",
+    "sale_price_gt": null,
+    "cap_rate_gte": "0.055",
+    "cap_rate_lte": null,
     "sq_ft_gte": 30000,
     "sq_ft_lte": null,
+    "clear_height_ft_gte": "28",
+    "dock_doors_gte": 4,
+    "trailer_parking_spaces_gte": 40,
+    "parking_spaces_gte": 100,
     "availability_before": "2026-08-31",
     "require_immediate": false,
+    "requires_coordinates": true,
     "aggregate": null,
     "aggregate_field": null,
-    "sort": "price_asc | size_desc | availability_asc | tenant_fit",
+    "sort": "price_asc | sale_price_asc | cap_rate_desc | size_desc | availability_asc | tenant_fit",
     "limit": 5
   }
 }
@@ -672,6 +707,7 @@ Output:
   "tool": "nearby_properties",
   "status": "ok",
   "origin": {},
+  "spatial_backend": {"status": "ready | numeric_fallback | unavailable"},
   "results": [
     {
       "distance_miles": 0.7,
@@ -684,7 +720,7 @@ Output:
 }
 ```
 
-Usage rule: use this for proximity and radius questions. Do not calculate distance yourself for final claims.
+Usage rule: use this for proximity, radius, coordinate, and map-link questions. The backend uses PostGIS `geography(Point,4326)` when ready and falls back to stored numeric coordinates otherwise. Do not calculate distance yourself for final claims.
 
 ### `audit_data`
 

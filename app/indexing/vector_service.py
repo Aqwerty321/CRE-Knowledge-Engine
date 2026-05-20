@@ -130,6 +130,8 @@ async def _upsert_points(points: list[dict[str, Any]]) -> bool:
 
 
 async def index_chunks_by_ids(chunk_ids: list[UUID]) -> dict[str, object]:
+    from app.routing.query_constructor import invalidate_live_location_value_cache
+
     settings = get_settings()
     if not settings.vector_index_on_import:
         return {"status": "disabled", "indexed_chunk_count": 0}
@@ -194,6 +196,27 @@ async def index_chunks_by_ids(chunk_ids: list[UUID]) -> dict[str, object]:
                         "property_types": sorted({record.property_type for record in property_records}),
                         "addresses": sorted({record.address for record in property_records if record.address}),
                         "markets": sorted({record.market for record in property_records if record.market}),
+                        "countries": sorted({record.country for record in property_records if record.country}),
+                        "country_codes": sorted({record.country_code for record in property_records if record.country_code}),
+                        "regions": sorted({record.region for record in property_records if record.region}),
+                        "state_provinces": sorted({record.state_province for record in property_records if record.state_province}),
+                        "cities": sorted({record.city for record in property_records if record.city}),
+                        "localities": sorted({record.locality for record in property_records if record.locality}),
+                        "neighborhoods": sorted({record.neighborhood for record in property_records if record.neighborhood}),
+                        "submarkets": sorted({record.submarket for record in property_records if record.submarket}),
+                        "statuses": sorted({record.status for record in property_records if record.status}),
+                        "usage_types": sorted({record.usage_type for record in property_records if record.usage_type}),
+                        "furnishing_statuses": sorted({record.furnishing_status for record in property_records if record.furnishing_status}),
+                        "map_urls": sorted({record.map_url for record in property_records if record.map_url})[:8],
+                        "geo_points": [
+                            {
+                                "address": record.address,
+                                "lat": float(record.geo_lat),
+                                "lng": float(record.geo_lng),
+                            }
+                            for record in property_records[:8]
+                            if record.geo_lat is not None and record.geo_lng is not None
+                        ],
                         "text_preview": chunk.chunk_text[:500],
                     },
                 }
@@ -208,6 +231,7 @@ async def index_chunks_by_ids(chunk_ids: list[UUID]) -> dict[str, object]:
                 result = await session.execute(select(Chunk).where(Chunk.id.in_(indexed_ids)))
                 for chunk in result.scalars():
                     chunk.embedding_id = str(chunk.id)
+        invalidate_live_location_value_cache()
 
     return {
         "status": "indexed" if indexed_ids else "no_vectors_indexed",
@@ -224,10 +248,13 @@ async def _clear_chunk_embedding_ids() -> None:
 
 
 async def index_all_chunks(*, reset_collection: bool = False) -> dict[str, object]:
+    from app.routing.query_constructor import invalidate_live_location_value_cache
+
     settings = get_settings()
     if reset_collection and settings.vector_index_on_import:
         if not await _delete_collection():
             return {"status": "qdrant_unavailable", "indexed_chunk_count": 0, "collection": settings.qdrant_collection}
+        invalidate_live_location_value_cache()
         await _clear_chunk_embedding_ids()
 
     async with SessionFactory() as session:

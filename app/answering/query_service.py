@@ -37,6 +37,9 @@ class RetrievedEvidence:
     retrieval_metadata: dict[str, object] = field(default_factory=dict)
 
 
+INVENTORY_OVERVIEW_SCAN_LIMIT = 5000
+
+
 def _distance_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     radius_km = 6371.0
     lat1_radians = math.radians(lat1)
@@ -106,6 +109,38 @@ def _format_price(value: Decimal | None) -> str:
     return "unknown price" if value is None else f"${value:,.2f}/SF"
 
 
+def _format_sale_price(value: Decimal | None) -> str | None:
+    if value is None:
+        return None
+    if value >= Decimal("1000000"):
+        return f"sale ${value / Decimal('1000000'):,.2f}M"
+    return f"sale ${value:,.0f}"
+
+
+def _format_cap_rate(value: Decimal | None) -> str | None:
+    if value is None:
+        return None
+    return f"cap rate {(value * Decimal('100')):,.2f}%"
+
+
+def _rich_detail_suffix(property_record: PropertyRecord, *, include_map: bool = False) -> str:
+    details = [
+        value
+        for value in [
+            _format_sale_price(property_record.sale_price),
+            _format_cap_rate(property_record.cap_rate),
+            f"{property_record.clear_height_ft} ft clear" if property_record.clear_height_ft is not None else None,
+            f"{property_record.dock_doors} dock door(s)" if property_record.dock_doors is not None else None,
+            f"{property_record.parking_spaces} parking space(s)" if property_record.parking_spaces is not None else None,
+            f"{property_record.city or property_record.locality}" if property_record.city or property_record.locality else None,
+        ]
+        if value
+    ]
+    if include_map and property_record.map_url:
+        details.append(f"Map: {property_record.map_url}")
+    return "" if not details else f" ({'; '.join(details)})"
+
+
 def _unique_addresses(items: list[RetrievedEvidence]) -> list[str]:
     seen: set[str] = set()
     addresses: list[str] = []
@@ -126,6 +161,81 @@ def _serialize_uuid_list(values: list[UUID]) -> list[str]:
     return [str(value) for value in values]
 
 
+SERIALIZED_RICH_PROPERTY_FIELDS = [
+    "property_name",
+    "listing_id",
+    "source_dataset",
+    "property_subtype",
+    "asset_class",
+    "usage_type",
+    "status",
+    "status_date",
+    "building_area_sq_ft",
+    "leasable_area_sq_ft",
+    "lot_size_sq_ft",
+    "lot_size_acres",
+    "year_built",
+    "year_renovated",
+    "clear_height_ft",
+    "dock_doors",
+    "drive_in_doors",
+    "truck_court_depth_ft",
+    "trailer_parking_spaces",
+    "parking_spaces",
+    "facing",
+    "furnishing_status",
+    "asking_rent",
+    "asking_rent_period",
+    "rent_currency",
+    "sale_price",
+    "price_currency",
+    "lease_type",
+    "available_from",
+    "vacancy_status",
+    "country_code",
+    "country",
+    "region",
+    "state_province",
+    "city",
+    "locality",
+    "neighborhood",
+    "submarket",
+    "postal_code",
+    "geo_lat",
+    "geo_lng",
+    "geocode_source",
+    "geocode_confidence",
+    "map_url",
+    "loading_access",
+    "yard_area_sq_ft",
+    "cold_storage",
+    "sprinklered",
+    "hvac_type",
+    "nearest_highway",
+    "highway_distance_miles",
+    "airport_distance_miles",
+    "port_distance_miles",
+    "rail_access",
+    "transit_score",
+    "ev_charging",
+    "fiber_available",
+    "additional_information",
+    "amenities_json",
+    "infrastructure_json",
+    "financials_json",
+    "tags_json",
+    "source_metadata_json",
+]
+
+
+def _serialize_property_value(value: object) -> object:
+    if isinstance(value, Decimal):
+        return _serialize_decimal(value)
+    if hasattr(value, "isoformat"):
+        return value.isoformat()  # type: ignore[no-any-return]
+    return value
+
+
 def _serialize_field_value(field_value: PropertyFieldValue) -> dict[str, object]:
     return {
         "field_name": field_value.field_name,
@@ -142,7 +252,7 @@ def _serialize_property_record(property_record: PropertyRecord | None) -> dict[s
     if property_record is None:
         return None
 
-    return {
+    payload: dict[str, object] = {
         "id": str(property_record.id),
         "address": property_record.address,
         "normalized_address": property_record.normalized_address,
@@ -158,6 +268,9 @@ def _serialize_property_record(property_record: PropertyRecord | None) -> dict[s
         "freshness_score": _serialize_decimal(property_record.freshness_score),
         "duplicate_group_key": property_record.duplicate_group_key,
     }
+    for field_name in SERIALIZED_RICH_PROPERTY_FIELDS:
+        payload[field_name] = _serialize_property_value(getattr(property_record, field_name))
+    return payload
 
 
 def _serialize_source_document(source_document: SourceDocument | None) -> dict[str, object] | None:
@@ -252,6 +365,7 @@ def _snapshot_filters_for_plan(
     *,
     no_results_context: dict[str, object] | None = None,
     data_quality_report: dict[str, object] | None = None,
+    inventory_summary: dict[str, object] | None = None,
     slack_context: dict[str, object] | None = None,
 ) -> dict[str, object]:
     filters = dict(plan.filters)
@@ -262,6 +376,8 @@ def _snapshot_filters_for_plan(
         filters["missing_data_explanation"] = no_results_context
     if data_quality_report is not None:
         filters["data_quality_report"] = data_quality_report
+    if inventory_summary is not None:
+        filters["inventory_summary"] = inventory_summary
     if slack_context:
         filters["slack_context"] = slack_context
     return filters
@@ -551,6 +667,88 @@ async def _retrieve_generic_property_search(session: AsyncSession, plan: QueryPl
     return [_structured_match_to_evidence(match) for match in matches]
 
 
+def _inventory_overview_sort_key(item: RetrievedEvidence) -> tuple[float, float, float, str]:
+    posted = item.source_document.posted_at.timestamp() if item.source_document.posted_at is not None else 0.0
+    authority = float(item.property_record.source_authority_score or Decimal("0"))
+    freshness = float(item.property_record.freshness_score or Decimal("0"))
+    return (posted, authority, freshness, item.property_record.address or "")
+
+
+def _select_inventory_overview_examples(items: list[RetrievedEvidence], limit: int) -> list[RetrievedEvidence]:
+    if len(items) <= limit:
+        return sorted(items, key=_inventory_overview_sort_key, reverse=True)
+
+    sorted_items = sorted(items, key=_inventory_overview_sort_key, reverse=True)
+    selected: list[RetrievedEvidence] = []
+    selected_keys: set[str] = set()
+    selected_types: set[str] = set()
+
+    for item in sorted_items:
+        property_type = item.property_record.property_type or "unknown"
+        key = _dedupe_key(item.property_record)
+        if property_type in selected_types or key in selected_keys:
+            continue
+        selected.append(item)
+        selected_types.add(property_type)
+        selected_keys.add(key)
+        if len(selected) >= limit:
+            return selected
+
+    for item in sorted_items:
+        key = _dedupe_key(item.property_record)
+        if key in selected_keys:
+            continue
+        selected.append(item)
+        selected_keys.add(key)
+        if len(selected) >= limit:
+            return selected
+
+    return selected
+
+
+def _is_generated_corpus_property(property_record: PropertyRecord) -> bool:
+    source_metadata = property_record.source_metadata_json or {}
+    return bool(
+        source_metadata.get("generated_corpus")
+        or property_record.source_dataset == "deterministic_public_geography_backbone"
+        or source_metadata.get("commercial_profile") == "synthetic_cre_profile"
+        or "Generated demo row" in str(source_metadata.get("license_note") or "")
+    )
+
+
+def _inventory_summary(items: list[RetrievedEvidence]) -> dict[str, object]:
+    type_counts: dict[str, int] = {}
+    market_counts: dict[str, int] = {}
+    generated_count = 0
+    for item in items:
+        property_type = _format_property_type(item.property_record.property_type or "unknown")
+        type_counts[property_type] = type_counts.get(property_type, 0) + 1
+        if item.property_record.market:
+            market_counts[item.property_record.market] = market_counts.get(item.property_record.market, 0) + 1
+        if _is_generated_corpus_property(item.property_record):
+            generated_count += 1
+
+    return {
+        "total_count": len(items),
+        "generated_corpus_count": generated_count,
+        "sourced_seed_count": len(items) - generated_count,
+        "type_counts": dict(sorted(type_counts.items())),
+        "top_markets": dict(sorted(market_counts.items(), key=lambda item: (-item[1], item[0]))[:5]),
+    }
+
+
+async def _retrieve_inventory_overview(
+    session: AsyncSession,
+    plan: QueryPlan,
+) -> tuple[list[RetrievedEvidence], dict[str, object]]:
+    filters = dict(plan.filters)
+    filters["limit"] = INVENTORY_OVERVIEW_SCAN_LIMIT
+    matches = await retrieve_structured_property_matches(session, filters, dedupe=True)
+    all_items = [_structured_match_to_evidence(match) for match in matches]
+    display_limit = int(plan.filters.get("limit") or 10)
+    return _select_inventory_overview_examples(all_items, display_limit), _inventory_summary(all_items)
+
+
 async def _retrieve_generic_exact_lookup(session: AsyncSession, plan: QueryPlan) -> list[RetrievedEvidence]:
     filters = dict(plan.filters)
     filters["limit"] = max(int(filters.get("limit") or 5), 10)
@@ -586,7 +784,8 @@ async def _retrieve_evidence(session: AsyncSession, plan: QueryPlan) -> list[Ret
     if plan.query_type == "generic_property_search":
         return await _retrieve_generic_property_search(session, plan)
     if plan.query_type == "generic_inventory_overview":
-        return await _retrieve_generic_property_search(session, plan)
+        items, _summary = await _retrieve_inventory_overview(session, plan)
+        return items
     if plan.query_type == "generic_exact_lookup":
         return await _retrieve_generic_exact_lookup(session, plan)
     if plan.query_type == "generic_aggregation":
@@ -701,26 +900,31 @@ def _render_data_quality_answer(report: dict[str, object]) -> str:
 
 def _render_generic_property_search(plan: QueryPlan, items: list[RetrievedEvidence]) -> str:
     title = "Found" if len(items) != 1 else "Found one"
+    include_map = bool(plan.filters.get("requires_coordinates"))
     lines = [f"*{title} {len(items)} matching sourced listing(s)*"]
     for item in items:
         lines.append(
             f"- *{item.property_record.address}* - {_format_property_type(item.property_record.property_type)}, "
             f"{_format_sq_ft(item.property_record.sq_ft)} at {_format_price(item.property_record.price_per_sq_ft)}, "
-            f"{item.property_record.availability or 'availability unknown'}. Source: {item.source_summary}"
+            f"{item.property_record.availability or 'availability unknown'}{_rich_detail_suffix(item.property_record, include_map=include_map)}. "
+            f"Source: {item.source_summary}"
         )
     lines.extend(["", f"_Direct match - {len(items)} source(s) checked._"])
     return "\n".join(lines)
 
 
-def _render_inventory_overview(plan: QueryPlan, items: list[RetrievedEvidence]) -> str:
-    type_counts: dict[str, int] = {}
-    market_counts: dict[str, int] = {}
-    for item in items:
-        property_type = _format_property_type(item.property_record.property_type or "unknown")
-        type_counts[property_type] = type_counts.get(property_type, 0) + 1
-        if item.property_record.market:
-            market_counts[item.property_record.market] = market_counts.get(item.property_record.market, 0) + 1
-
+def _render_inventory_overview(
+    plan: QueryPlan,
+    items: list[RetrievedEvidence],
+    *,
+    inventory_summary: dict[str, object] | None = None,
+) -> str:
+    summary = inventory_summary or _inventory_summary(items)
+    type_counts = dict(summary.get("type_counts") or {})
+    market_counts = dict(summary.get("top_markets") or {})
+    total_count = int(summary.get("total_count") or len(items))
+    generated_count = int(summary.get("generated_corpus_count") or 0)
+    sourced_seed_count = int(summary.get("sourced_seed_count") or total_count - generated_count)
     type_summary = ", ".join(f"{name}: {count}" for name, count in sorted(type_counts.items())) or "no typed records"
     market_summary = ", ".join(
         f"{name}: {count}" for name, count in sorted(market_counts.items(), key=lambda item: (-item[1], item[0]))[:5]
@@ -729,22 +933,24 @@ def _render_inventory_overview(plan: QueryPlan, items: list[RetrievedEvidence]) 
         "availability_asc": "soonest availability first",
         "price_asc": "lowest asking rent first",
         "size_desc": "largest spaces first",
-    }.get(str(plan.filters.get("sort") or ""), "source authority and freshness first")
+    }.get(str(plan.filters.get("sort") or ""), "representative by property type and recency")
 
     lines = [
         "*Inventory snapshot from sourced property records*",
-        f"I found {len(items)} deduped sourced propert{'y' if len(items) == 1 else 'ies'} in the current slice.",
+        f"I found {total_count:,} deduped sourced propert{'y' if total_count == 1 else 'ies'} overall; showing {len(items):,} cited example{'s' if len(items) != 1 else ''}.",
         f"- By type: {type_summary}.",
         f"- Top markets: {market_summary}.",
         f"- Sort used: {sort_label}.",
-        "",
-        "*Properties:*",
     ]
+    if generated_count:
+        lines.append(f"- Corpus mix: {generated_count:,} generated large-corpus rows; {sourced_seed_count:,} live/seeded source rows.")
+    lines.extend(["", "*Representative cited properties:*"])
     for item in items:
         lines.append(
             f"- *{item.property_record.address}* - {_format_property_type(item.property_record.property_type)}, "
             f"{_format_sq_ft(item.property_record.sq_ft)} at {_format_price(item.property_record.price_per_sq_ft)}, "
-            f"{item.property_record.availability or 'availability unknown'}. Source: {item.source_summary}"
+            f"{item.property_record.availability or 'availability unknown'}{_rich_detail_suffix(item.property_record)}. "
+            f"Source: {item.source_summary}"
         )
 
     lines.extend(
@@ -762,7 +968,7 @@ def _render_generic_exact_lookup(items: list[RetrievedEvidence]) -> str:
         "*Exact property read*",
         f"*{selected.property_record.address}* looks like {_format_sq_ft(selected.property_record.sq_ft)} "
         f"{_format_property_type(selected.property_record.property_type)} at {_format_price(selected.property_record.price_per_sq_ft)}, "
-        f"available {selected.property_record.availability or 'unknown'}."
+        f"available {selected.property_record.availability or 'unknown'}{_rich_detail_suffix(selected.property_record, include_map=True)}."
     ]
     lines.extend(["", "*Sources checked:*" ])
     for item in items[:5]:
@@ -855,6 +1061,7 @@ def _render_answer(
     items: list[RetrievedEvidence],
     *,
     no_results_context: dict[str, object] | None = None,
+    inventory_summary: dict[str, object] | None = None,
 ) -> str:
     if not items:
         return _render_no_results(plan, no_results_context)
@@ -948,7 +1155,7 @@ def _render_answer(
         return _render_generic_property_search(plan, items)
 
     if plan.query_type == "generic_inventory_overview":
-        return _render_inventory_overview(plan, items)
+        return _render_inventory_overview(plan, items, inventory_summary=inventory_summary)
 
     if plan.query_type == "generic_exact_lookup":
         return _render_generic_exact_lookup(items)
@@ -1053,12 +1260,21 @@ async def answer_query(
                     "data_quality_report": data_quality_report,
                 }
 
-            items = await _retrieve_evidence(session, plan)
+            inventory_summary = None
+            if plan.query_type == "generic_inventory_overview":
+                items, inventory_summary = await _retrieve_inventory_overview(session, plan)
+            else:
+                items = await _retrieve_evidence(session, plan)
             no_results_context = None
             constructor_filters = _query_constructor_filters_for_plan(plan)
             if not items and constructor_filters is not None:
                 no_results_context = await explain_no_results(session, constructor_filters)
-            rendered_answer = _render_answer(plan, items, no_results_context=no_results_context)
+            rendered_answer = _render_answer(
+                plan,
+                items,
+                no_results_context=no_results_context,
+                inventory_summary=inventory_summary,
+            )
             comparison_table = _build_comparison_table(plan, items)
 
             evidence_records: list[EvidenceItem] = []
@@ -1083,6 +1299,7 @@ async def answer_query(
                 filters_json=_snapshot_filters_for_plan(
                     plan,
                     no_results_context=no_results_context,
+                    inventory_summary=inventory_summary,
                     slack_context=slack_context,
                 ),
                 evidence_ids=[record.id for record in evidence_records],

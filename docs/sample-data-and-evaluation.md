@@ -4,7 +4,7 @@
 
 The sample dataset should be realistic, deliberately overlapping, and large enough to make the demo feel like a working workspace rather than a canned lookup table. It should prove that the bot can handle Slack messages, PDFs, CSVs, Excel files, duplicates, numeric filters, dates, proximity, citations, noisy operational language, local synthesis, and replay.
 
-Current size: 15 files plus 8 Slack-shaped messages, for 23 importable sources and 25 seeded property rows.
+Current size: 19 files plus 8 Slack-shaped messages, for 27 importable sources and 2,425 seeded property rows. The hand-authored set still drives the golden demo paths; the generated large corpus adds 2,400 richer records across US and European markets.
 
 The sample dataset is also the reproducible evaluation harness. It should be importable locally without a live Slack workspace while preserving Slack-shaped metadata.
 
@@ -45,6 +45,18 @@ Seed it with:
 | F13 | `tenant-expansion-brief.txt` | Text | Tenant-fit context without structured property rows. |
 | F14 | `retail-office-followups.csv` | CSV | More office and retail options for filter and exclusion tests. |
 | F15 | `access-constraints-notes.txt` | Text | Operational caveats without direct structured rows. |
+| F16 | `global-cre-corpus-us-1.csv` | CSV | Generated US-rich corpus shard for Slack file seeding and inventory scale. |
+| F17 | `global-cre-corpus-us-2.csv` | CSV | Generated US-rich corpus shard for Slack file seeding and inventory scale. |
+| F18 | `global-cre-corpus-europe-1.csv` | CSV | Generated Europe-rich corpus shard for Slack file seeding and locality coverage. |
+| F19 | `global-cre-corpus-europe-2.csv` | CSV | Generated Europe-rich corpus shard for Slack file seeding and locality coverage. |
+
+The generated shard manifest is rebuilt by:
+
+```bash
+uv run cre-cli build-large-corpus --rows 2400 --seed 20260519
+```
+
+The quality report records distribution across industrial, office, retail, multifamily, mixed-use, land, hospitality, medical, data-center, self-storage, and parking records, plus 100% coverage for generated coordinates, map URLs, and `additional_information`.
 
 ## Seeded Properties
 

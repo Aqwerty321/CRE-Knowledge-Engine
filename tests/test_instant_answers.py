@@ -28,7 +28,17 @@ async def _prepare_query_database() -> None:
             await session.execute(delete(EvidenceItem))
             await session.execute(delete(Query))
             await session.execute(delete(SourceDocument))
-    await import_sample_data(Path("sample-data"))
+    await import_sample_data(Path("sample-data"), include_generated=False)
+
+
+async def _prepare_generated_query_database() -> None:
+    async with SessionFactory() as session:
+        async with session.begin():
+            await session.execute(delete(AnswerSnapshot))
+            await session.execute(delete(EvidenceItem))
+            await session.execute(delete(Query))
+            await session.execute(delete(SourceDocument))
+    await import_sample_data(Path("sample-data"), include_generated=True)
 
 
 async def _load_query_artifacts(query_id: str) -> tuple[Query, list[EvidenceItem], AnswerSnapshot | None]:
@@ -54,6 +64,15 @@ def prepared_query_db(async_runner: asyncio.Runner) -> None:
         async_runner.run(_prepare_query_database())
     except (OSError, SQLAlchemyError) as exc:
         pytest.skip(f"Postgres not available for golden answer tests: {exc}")
+
+
+@pytest.fixture
+def prepared_generated_query_db(async_runner: asyncio.Runner) -> None:
+    try:
+        _ensure_schema()
+        async_runner.run(_prepare_generated_query_database())
+    except (OSError, SQLAlchemyError) as exc:
+        pytest.skip(f"Postgres not available for generated-corpus answer tests: {exc}")
 
 
 @pytest.mark.golden
@@ -319,7 +338,10 @@ def test_loading_access_explain_query_shows_keyword_chunk_matches(
     beacon_evidence = evidence_by_address["18 Beacon Freight"]
     elm_evidence = evidence_by_address["130 Elm Ave"]
     assert beacon_evidence["evidence_role"] == "result"
-    assert beacon_evidence["source_document"]["file_name"] == "last-mile-industrial-watchlist.csv"
+    assert beacon_evidence["source_document"]["file_name"] in {
+        "last-mile-industrial-watchlist.csv",
+        "client-tour-notes.txt",
+    }
     assert "truck court" in beacon_evidence["selection_reason"]
     assert "trailer parking" in beacon_evidence["selection_reason"]
     assert "loading dock" in elm_evidence["chunk"]["text_preview"]
@@ -411,6 +433,55 @@ def test_data_quality_query_explains_missing_structured_coverage(
     assert "Data-quality pass" in payload["rendered_answer"]
     assert "source(s) have text but no extracted property rows" in payload["rendered_answer"]
     assert payload["data_quality_report"]["sources_without_properties"]
+
+
+@pytest.mark.golden
+def test_cap_rate_query_returns_generated_corpus_matches(
+    prepared_generated_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = async_runner.run(answer_query("Show industrial listings with cap rate over 6%."))
+
+    assert payload["status"] == "answered"
+    assert payload["route_mode"] == "instant"
+    assert "structured_property_search" in payload["reason_codes"]
+    assert payload["matched_addresses"]
+    assert "cap rate" in payload["rendered_answer"].lower()
+
+    query_record, evidence_items, snapshot = async_runner.run(_load_query_artifacts(payload["query_id"]))
+
+    assert query_record.route_mode == "instant"
+    assert "cap_rate_lower_bound" in query_record.reason_codes
+    assert len(evidence_items) >= 1
+    assert snapshot is not None
+    assert snapshot.filters_json["cap_rate_gte"] == "0.06"
+    assert any("cap_rate" in item.matched_fields for item in evidence_items)
+
+
+@pytest.mark.golden
+def test_inventory_overview_summarizes_generated_corpus(
+    prepared_generated_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = async_runner.run(answer_query("what are the types of properties"))
+
+    assert payload["status"] == "answered"
+    assert payload["route_mode"] == "instant"
+    summary = payload["filters"]["inventory_summary"]
+    assert summary["total_count"] >= 2400
+    assert summary["generated_corpus_count"] == 2400
+    assert "data center" in payload["rendered_answer"]
+    assert "generated large-corpus rows" in payload["rendered_answer"]
+    assert "current slice" not in payload["rendered_answer"]
+
+    legacy_addresses = {
+        "120 Main St",
+        "130 Elm Ave",
+        "18 Beacon Freight",
+        "240 Harbor Rd",
+        "88 Foundry Ln",
+    }
+    assert any(address not in legacy_addresses for address in payload["matched_addresses"])
 
 
 @pytest.mark.golden

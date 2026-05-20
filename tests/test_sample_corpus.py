@@ -1,6 +1,11 @@
+import json
+
+import app.routing.query_constructor as query_constructor
+
 from pathlib import Path
 
 from app.ingestion.sample_importer import load_sample_manifest
+from app.routing.query_constructor import build_structured_query_spec
 from app.slack.demo_files import build_default_file_seed_plan
 from app.slack.demo_seed import build_default_persona_seed_plan
 
@@ -20,6 +25,181 @@ def test_expanded_sample_manifest_has_demo_depth() -> None:
     assert any("truck court" in text for text in slack_texts)
 
 
+def test_large_generated_corpus_is_loaded_with_rich_fields() -> None:
+    manifest = load_sample_manifest(Path("sample-data"))
+
+    generated_sources = [source for source in manifest.sources if source.source_id.startswith("LC")]
+    generated_properties = [property_model for source in generated_sources for property_model in source.properties]
+    sample_property = generated_properties[0]
+
+    assert len(generated_sources) == 4
+    assert len(generated_properties) == 2400
+    assert all(source.source_url is None for source in generated_sources)
+    assert {source.file_name for source in generated_sources} == {
+        "global-cre-corpus-us-1.csv",
+        "global-cre-corpus-us-2.csv",
+        "global-cre-corpus-europe-1.csv",
+        "global-cre-corpus-europe-2.csv",
+    }
+    assert sample_property.locality
+    assert sample_property.neighborhood
+    assert sample_property.furnishing_status
+    assert sample_property.status
+    assert sample_property.additional_information
+    assert sample_property.geo_lat is not None
+    assert sample_property.geo_lng is not None
+    assert sample_property.map_url and "maps/search" in sample_property.map_url
+    assert sum(1 for property_model in generated_properties if property_model.cap_rate is not None) > 0
+
+
+def test_sample_property_aliases_preserve_comments_and_unknown_columns() -> None:
+    property_model = load_sample_manifest(Path("sample-data")).sources[0].properties[0].model_copy(
+        update={
+            "neighborhood": None,
+            "furnishing_status": None,
+        }
+    )
+    aliased = property_model.__class__.model_validate(
+        {
+            "address": "1 Alias Rd",
+            "property_type": "office",
+            "neighbourhood": "Alias Quarter",
+            "funishing": "turnkey",
+            "comments": "Broker says show only after NDA.",
+            "custom_signal": "retain me",
+        }
+    )
+
+    assert aliased.neighborhood == "Alias Quarter"
+    assert aliased.furnishing_status == "turnkey"
+    assert aliased.additional_information == "Broker says show only after NDA."
+    assert aliased.model_extra == {"custom_signal": "retain me"}
+
+
+def test_structured_query_constructor_detects_rich_field_filters() -> None:
+    spec = build_structured_query_spec("Show furnished retail in Shoreditch with EV charging and west facing frontage")
+
+    assert spec is not None
+    filters = spec.to_filters()
+    assert "retail" in filters["property_types"]
+    assert "shoreditch" in filters["locations"]
+    assert "furnished" in filters["furnishing_statuses"]
+    assert "west" in filters["facing"]
+    assert "ev charging" in filters["infrastructure_terms"]
+
+
+def test_structured_query_constructor_detects_expanded_dataset_locations() -> None:
+    spec = build_structured_query_spec("Show industrial listings in Atlanta with map links")
+
+    assert spec is not None
+    filters = spec.to_filters()
+    assert "atlanta" in filters["locations"]
+    assert filters["requires_coordinates"] is True
+    assert "map" not in filters["keywords"]
+    assert "coordinates" not in filters["keywords"]
+
+
+def test_structured_query_constructor_expands_macro_regions() -> None:
+    spec = build_structured_query_spec("Show industrial listings in Europe with map links")
+
+    assert spec is not None
+    filters = spec.to_filters()
+    assert "france" in filters["locations"]
+    assert "germany" in filters["locations"]
+    assert "united kingdom" in filters["locations"]
+
+
+def test_structured_query_constructor_uses_corpus_seed_location_lexicon() -> None:
+    toronto = build_structured_query_spec("Show office listings in Toronto with map links")
+    barcelona = build_structured_query_spec("Show industrial listings in Barcelona with map links")
+
+    assert toronto is not None
+    assert barcelona is not None
+    assert "toronto" in toronto.to_filters()["locations"]
+    assert "barcelona" in barcelona.to_filters()["locations"]
+
+
+def test_structured_query_constructor_uses_live_qdrant_location_lexicon(monkeypatch) -> None:
+    monkeypatch.setattr(query_constructor, "_load_live_qdrant_location_values", lambda: {"lisbon", "portugal", "alfama"})
+
+    spec = build_structured_query_spec("Show office listings in Lisbon with map links")
+
+    assert spec is not None
+    filters = spec.to_filters()
+    assert "lisbon" in filters["locations"]
+    assert filters["requires_coordinates"] is True
+
+
+def test_live_qdrant_location_cache_can_be_invalidated(monkeypatch) -> None:
+    query_constructor.invalidate_live_location_value_cache()
+
+    monkeypatch.setattr(query_constructor, "_fetch_live_qdrant_location_values", lambda: {"lisbon"})
+    first = query_constructor._load_live_qdrant_location_values()
+
+    monkeypatch.setattr(query_constructor, "_fetch_live_qdrant_location_values", lambda: {"porto"})
+    cached = query_constructor._load_live_qdrant_location_values()
+    query_constructor.invalidate_live_location_value_cache()
+    refreshed = query_constructor._load_live_qdrant_location_values()
+
+    assert first == {"lisbon"}
+    assert cached == {"lisbon"}
+    assert refreshed == {"porto"}
+
+
+def test_structured_query_constructor_uses_property_record_location_snapshot(monkeypatch, tmp_path: Path) -> None:
+    snapshot_path = tmp_path / "property-record-location-lexicon.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "field_values": {
+                    "markets": [],
+                    "countries": ["Portugal"],
+                    "country_codes": [],
+                    "regions": [],
+                    "state_provinces": [],
+                    "cities": ["Lisbon"],
+                    "localities": ["Alfama"],
+                    "neighborhoods": [],
+                    "submarkets": [],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    query_constructor.invalidate_live_location_value_cache()
+    monkeypatch.setattr(query_constructor, "_property_record_location_snapshot_path", lambda: snapshot_path)
+    monkeypatch.setattr(query_constructor, "_load_live_qdrant_location_values", lambda: set())
+
+    spec = build_structured_query_spec("Show office listings in Lisbon with map links")
+
+    assert spec is not None
+    filters = spec.to_filters()
+    assert "lisbon" in filters["locations"]
+    assert filters["requires_coordinates"] is True
+
+
+def test_structured_query_constructor_detects_geo_physical_and_financial_filters() -> None:
+    spec = build_structured_query_spec(
+        "Show industrial for sale under $5m with cap rate over 5%, at least 4 dock doors, "
+        "40 trailer parking spaces, 100 parking spaces, clear height 28 ft, and map links"
+    )
+
+    assert spec is not None
+    filters = spec.to_filters()
+    assert "industrial" in filters["property_types"]
+    assert filters["sale_price_lt"] == "5000000"
+    assert filters["cap_rate_gte"] == "0.05"
+    assert filters["dock_doors_gte"] == 4
+    assert filters["trailer_parking_spaces_gte"] == 40
+    assert filters["parking_spaces_gte"] == 100
+    assert filters["clear_height_ft_gte"] == "28"
+    assert filters["requires_coordinates"] is True
+    assert "loading dock" not in filters["infrastructure_terms"]
+    assert "loading dock" not in filters["keywords"]
+    assert "trailer" not in filters["infrastructure_terms"]
+    assert "trailer" not in filters["keywords"]
+
+
 def test_slack_seed_plan_surfaces_expanded_demo_material() -> None:
     file_plan = build_default_file_seed_plan()
     persona_plan = build_default_persona_seed_plan()
@@ -32,5 +212,9 @@ def test_slack_seed_plan_surfaces_expanded_demo_material() -> None:
     assert "tenant-expansion-brief.txt" in seeded_files
     assert "retail-office-followups.csv" in seeded_files
     assert "access-constraints-notes.txt" in seeded_files
+    assert "global-cre-corpus-us-1.csv" in seeded_files
+    assert "global-cre-corpus-us-2.csv" in seeded_files
+    assert "global-cre-corpus-europe-1.csv" in seeded_files
+    assert "global-cre-corpus-europe-2.csv" in seeded_files
     assert "listings_beacon_watchlist" in seeded_messages
     assert "market_expansion_brief" in seeded_messages

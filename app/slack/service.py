@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import re
 from datetime import datetime, timezone
@@ -43,6 +45,8 @@ FOLLOW_UP_MODAL_REFRESH_BLOCK_ID = "follow_up_refresh_block"
 FOLLOW_UP_MODAL_REFRESH_ACTION_ID = "refresh_follow_up_suggestions"
 FOLLOW_UP_MODAL_CUSTOM_VALUE = "custom"
 FOLLOW_UP_MODAL_MODES = ("instant", "auto", "agent")
+SLACK_SECTION_TEXT_LIMIT = 3000
+SLACK_SAFE_SECTION_TEXT_LIMIT = 2900
 
 
 def _utcnow() -> datetime:
@@ -271,7 +275,7 @@ def _comparison_table_from_evidence(payload: dict[str, Any]) -> dict[str, object
     return {"title": "Quick comparison", "columns": ["Addr", "SF", "Rent", "Avail"], "rows": rows}
 
 
-def _normalize_comparison_table(payload: dict[str, Any]) -> dict[str, object] | None:
+def _normalize_comparison_table(payload: dict[str, Any], *, row_limit: int | None = 5) -> dict[str, object] | None:
     table = payload.get("comparison_table")
     if not isinstance(table, dict):
         table = _comparison_table_from_evidence(payload)
@@ -283,7 +287,8 @@ def _normalize_comparison_table(payload: dict[str, Any]) -> dict[str, object] | 
         return None
     normalized_columns = [str(value).strip() for value in columns if str(value).strip()]
     normalized_rows: list[list[str]] = []
-    for row in rows[:5]:
+    candidate_rows = rows if row_limit is None else rows[:row_limit]
+    for row in candidate_rows:
         if not isinstance(row, list):
             continue
         values = [str(value).strip() for value in row[: len(normalized_columns)]]
@@ -296,38 +301,32 @@ def _normalize_comparison_table(payload: dict[str, Any]) -> dict[str, object] | 
     return {"title": title, "columns": normalized_columns, "rows": normalized_rows}
 
 
-def _truncate_table_cell(value: str, width: int) -> str:
-    if len(value) <= width:
-        return value
-    return value[: max(1, width - 1)] + "…"
+def _slugify_table_title(title: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    return normalized or "comparison"
 
 
-def _render_table_block_text(table: dict[str, object]) -> str:
-    columns = [str(value) for value in table["columns"]]
-    rows = [[str(value) for value in row] for row in table["rows"]]
-    widths = [len(column) for column in columns]
-    max_widths = [18, 10, 10, 12, 8]
-    for row in rows:
-        for index, value in enumerate(row):
-            widths[index] = min(max(widths[index], len(value)), max_widths[index] if index < len(max_widths) else 16)
-
-    def render_row(values: list[str]) -> str:
-        padded = []
-        for index, value in enumerate(values):
-            text = _truncate_table_cell(value, widths[index])
-            padded.append(text.ljust(widths[index]))
-        return "  ".join(padded).rstrip()
-
-    lines = [render_row(columns), render_row(["-" * width for width in widths])]
-    lines.extend(render_row(row) for row in rows)
-    return f"*{table['title']}*\n```\n" + "\n".join(lines) + "\n```"
-
-
-def build_comparison_table_block(payload: dict[str, Any]) -> dict[str, Any] | None:
-    table = _normalize_comparison_table(payload)
+def build_comparison_table_csv_attachment(payload: dict[str, Any]) -> dict[str, str] | None:
+    table = _normalize_comparison_table(payload, row_limit=None)
     if table is None:
         return None
-    return {"type": "section", "text": {"type": "mrkdwn", "text": _render_table_block_text(table)}}
+
+    buffer = io.StringIO(newline="")
+    writer = csv.writer(buffer)
+    columns = [str(value) for value in table["columns"]]
+    rows = [[str(value) for value in row] for row in table["rows"]]
+    writer.writerow(columns)
+    writer.writerows(rows)
+
+    title = str(table.get("title") or "Quick comparison")
+    query_id = str(payload.get("query_id") or "").strip()
+    suffix = f"-{query_id[:8]}" if query_id else ""
+    filename = f"{_slugify_table_title(title)}{suffix}.csv"
+    return {
+        "content": buffer.getvalue(),
+        "filename": filename,
+        "title": f"{title} CSV",
+    }
 
 
 def build_trust_receipt_block(payload: dict[str, Any]) -> dict[str, Any]:
@@ -342,11 +341,40 @@ def build_trust_receipt_block(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_primary_answer_block(payload: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "type": "section",
-        "text": {"type": "mrkdwn", "text": _normalize_slack_mrkdwn(str(payload.get("rendered_answer") or ""))},
-    }
+def _split_slack_mrkdwn(text: str, *, limit: int = SLACK_SAFE_SECTION_TEXT_LIMIT) -> list[str]:
+    normalized = _normalize_slack_mrkdwn(text).strip()
+    if not normalized:
+        return [""]
+    if len(normalized) <= limit:
+        return [normalized]
+
+    chunks: list[str] = []
+    current = ""
+    for line in normalized.splitlines():
+        candidate = line if not current else f"{current}\n{line}"
+        if len(candidate) <= limit:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+            current = ""
+        while len(line) > limit:
+            chunks.append(line[:limit])
+            line = line[limit:]
+        current = line
+    if current:
+        chunks.append(current)
+    return chunks or [normalized[:limit]]
+
+
+def _build_primary_answer_blocks(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": chunk[:SLACK_SECTION_TEXT_LIMIT]},
+        }
+        for chunk in _split_slack_mrkdwn(str(payload.get("rendered_answer") or ""))
+    ]
 
 
 async def enqueue_app_mention_event(payload: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
@@ -581,10 +609,7 @@ def build_slack_reply_text(payload: dict[str, Any]) -> str:
 
 
 def build_answer_blocks(answer_payload: dict[str, Any]) -> list[dict[str, Any]]:
-    blocks: list[dict[str, Any]] = [_build_primary_answer_block(answer_payload)]
-    table_block = build_comparison_table_block(answer_payload)
-    if table_block is not None:
-        blocks.append(table_block)
+    blocks: list[dict[str, Any]] = _build_primary_answer_blocks(answer_payload)
     blocks.append(build_trust_receipt_block(answer_payload))
 
     action_elements: list[dict[str, Any]] = []
@@ -628,10 +653,7 @@ def build_answer_blocks(answer_payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def build_deeper_review_blocks(deeper_payload: dict[str, Any]) -> list[dict[str, Any]]:
-    blocks = [_build_primary_answer_block(deeper_payload)]
-    table_block = build_comparison_table_block(deeper_payload)
-    if table_block is not None:
-        blocks.append(table_block)
+    blocks = _build_primary_answer_blocks(deeper_payload)
     blocks.append(build_trust_receipt_block(deeper_payload))
     allowed_ids = list(((deeper_payload.get("escalation_payload") or {}).get("allowed_evidence_ids") or []))
     cited_ids = list(deeper_payload.get("cited_evidence_ids") or [])
@@ -733,12 +755,20 @@ def build_show_sources_text(explain_payload: dict[str, Any]) -> str:
         for evidence in role_items:
             summary = str(evidence.get("source_summary") or "Unknown source")
             source_document = dict(evidence.get("source_document") or {})
-            source_url = source_document.get("source_url")
-            if source_url:
-                lines.append(f"- {summary} - {source_url}")
+            source_link = _format_source_link(source_document.get("source_url"))
+            if source_link:
+                lines.append(f"- {summary} - {source_link}")
             else:
                 lines.append(f"- {summary}")
     return "\n".join(lines)
+
+
+def _format_source_link(source_url: object) -> str | None:
+    url = str(source_url or "").strip()
+    if not url or "demo.local" in url.lower():
+        return None
+    label = "Open source in Slack" if "slack" in url.lower() else "Open source"
+    return f"<{url}|{label}>"
 
 
 async def handle_show_sources_action(
@@ -1238,6 +1268,7 @@ __all__ = [
     "build_failed_status_text",
     "build_pending_status_blocks",
     "build_pending_status_text",
+    "build_comparison_table_csv_attachment",
     "build_slack_reply_text",
     "build_show_sources_text",
     "enqueue_app_mention_event",

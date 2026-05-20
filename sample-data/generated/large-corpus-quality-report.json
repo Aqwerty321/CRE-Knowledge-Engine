@@ -1,0 +1,69 @@
+{
+  "additional_information_coverage": 2400,
+  "cap_rate_coverage": 1896,
+  "coordinate_coverage": 2400,
+  "country_counts": {
+    "CA": 60,
+    "DE": 180,
+    "DK": 60,
+    "ES": 120,
+    "FR": 120,
+    "GB": 120,
+    "IE": 60,
+    "IT": 60,
+    "NL": 60,
+    "SE": 60,
+    "SG": 60,
+    "US": 1440
+  },
+  "manifest_path": "sample-data/generated/import-manifest-large-corpus.json",
+  "map_url_coverage": 2400,
+  "property_type_counts": {
+    "data_center": 72,
+    "hospitality": 120,
+    "industrial": 528,
+    "land": 192,
+    "medical": 96,
+    "mixed_use": 240,
+    "multifamily": 288,
+    "office": 432,
+    "parking": 48,
+    "retail": 336,
+    "self_storage": 48
+  },
+  "row_count": 2400,
+  "seed": 20260519,
+  "shards": [
+    {
+      "file_name": "global-cre-corpus-us-1.csv",
+      "row_count": 600,
+      "title": "Global CRE Corpus - US 1"
+    },
+    {
+      "file_name": "global-cre-corpus-us-2.csv",
+      "row_count": 600,
+      "title": "Global CRE Corpus - US 2"
+    },
+    {
+      "file_name": "global-cre-corpus-europe-1.csv",
+      "row_count": 600,
+      "title": "Global CRE Corpus - Europe 1"
+    },
+    {
+      "file_name": "global-cre-corpus-europe-2.csv",
+      "row_count": 600,
+      "title": "Global CRE Corpus - Europe 2"
+    }
+  ],
+  "status": "generated",
+  "status_counts": {
+    "available": 840,
+    "coming_soon": 432,
+    "leased": 288,
+    "pipeline": 144,
+    "sold": 168,
+    "under_offer": 288,
+    "unknown": 120,
+    "withdrawn": 120
+  }
+}

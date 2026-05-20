@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import hashlib
 import hmac
+import io
 import json
 from pathlib import Path
 import time
@@ -30,6 +32,7 @@ from app.slack.runtime import get_slack_app, get_slack_handler
 from app.slack.service import (
     FOLLOW_UP_MODAL_REFRESH_ACTION_ID,
     build_answer_blocks,
+    build_comparison_table_csv_attachment,
     build_slack_reply_text,
     enqueue_follow_up_request,
     validate_follow_up_modal_submission,
@@ -66,7 +69,7 @@ def _configure_slack_env(monkeypatch: pytest.MonkeyPatch, *, ingest_channel_poli
 
 
 async def _prepare_slack_database() -> None:
-    await import_sample_data(Path("sample-data"))
+    await import_sample_data(Path("sample-data"), include_generated=False)
     async with SessionFactory() as session:
         async with session.begin():
             await session.execute(delete(AnswerSnapshot))
@@ -750,16 +753,56 @@ def test_build_answer_blocks_adds_compact_trust_receipt_and_table() -> None:
     )
 
     assert blocks[0]["type"] == "section"
-    assert blocks[1]["type"] == "section"
-    assert "```" in blocks[1]["text"]["text"]
-    assert blocks[2]["type"] == "context"
-    assert "Instant answer" in blocks[2]["elements"][0]["text"]
-    assert blocks[3]["type"] == "actions"
-    assert [element["action_id"] for element in blocks[3]["elements"]] == [
+    assert len([block for block in blocks if block["type"] == "section"]) == 1
+    assert all("Quick comparison" not in json.dumps(block) for block in blocks)
+    assert blocks[1]["type"] == "context"
+    assert "Instant answer" in blocks[1]["elements"][0]["text"]
+    assert blocks[2]["type"] == "actions"
+    assert [element["action_id"] for element in blocks[2]["elements"]] == [
         "show_sources",
         "look_deeper",
         "open_follow_up_modal",
     ]
+
+    attachment = build_comparison_table_csv_attachment(
+        {
+            "query_id": "query-1",
+            "comparison_table": {
+                "title": "Quick comparison",
+                "columns": ["Addr", "SF", "Rent", "Avail"],
+                "rows": [
+                    ["240 Harbor Rd", "62,000 SF", "$18.00/SF", "Aug 2026"],
+                    ["88 Foundry Ln", "44,000 SF", "$21.50/SF", "Q2 2026"],
+                ],
+            },
+        }
+    )
+    assert attachment is not None
+    assert attachment["filename"].endswith(".csv")
+    assert "Addr,SF,Rent,Avail" in attachment["content"]
+    reader = csv.reader(io.StringIO(attachment["content"]))
+    rows = list(reader)
+    assert rows[1] == ["240 Harbor Rd", "62,000 SF", "$18.00/SF", "Aug 2026"]
+
+
+def test_build_answer_blocks_splits_long_answer_for_slack_section_limit() -> None:
+    long_answer = "\n".join(f"- *Property {index}* - sourced inventory detail with market and pricing." for index in range(120))
+
+    blocks = build_answer_blocks(
+        {
+            "answer_mode": "instant_answer",
+            "route_mode": "instant",
+            "reason_codes": ["broad_inventory"],
+            "evidence_count": 10,
+            "query_id": "query-1",
+            "rendered_answer": long_answer,
+        }
+    )
+
+    answer_sections = [block for block in blocks if block["type"] == "section" and "Property" in block["text"]["text"]]
+    assert len(answer_sections) > 1
+    assert all(len(block["text"]["text"]) <= 3000 for block in answer_sections)
+    assert any(block["type"] == "actions" for block in blocks)
 
 
 @pytest.mark.golden
@@ -788,7 +831,11 @@ def test_query_worker_posts_threaded_answer_with_show_sources_button(
     assert "120 Main St" in posted_reply["text"]
     assert processed[0]["pending_message_ts"] == posted_reply["ts"]
     assert any(block.get("type") == "context" for block in posted_reply["blocks"])
-    assert any("```" in block.get("text", {}).get("text", "") for block in posted_reply["blocks"] if block.get("type") == "section")
+    assert not any("Quick comparison" in json.dumps(block) for block in posted_reply["blocks"])
+    assert gateway.uploaded_files
+    assert gateway.uploaded_files[0]["thread_ts"] == "1715860000.000100"
+    assert gateway.uploaded_files[0]["filename"].endswith(".csv")
+    assert "Addr,SF,Rent,Avail" in gateway.uploaded_files[0]["content"]
     actions_block = _find_actions_block(posted_reply["blocks"])
     action_element = actions_block["elements"][0]
     assert action_element["action_id"] == "show_sources"
@@ -919,6 +966,8 @@ def test_auto_thread_follow_up_uses_coverage_router_and_preserves_thread_context
 
     query = async_runner.run(_load_latest_query())
     assert query is not None
+    query = async_runner.run(_load_latest_query())
+    assert query is not None
     explain_payload = async_runner.run(explain_query(str(query.id)))
     assert "follow_up" in explain_payload["reason_codes"]
     assert explain_payload["slack_context"]["message_ts"] == "1715860000.000250"
@@ -954,6 +1003,60 @@ def test_force_agent_job_bypasses_instant_router_and_posts_agent_mode(
     assert query.route_mode == "agent_forced"
     assert query.query_text == "where is this located and what is the best use case"
 
+
+@pytest.mark.golden
+def test_force_agent_job_uploads_csv_when_deeper_review_returns_comparison_table(
+    prepared_slack_db: None,
+    async_runner: asyncio.Runner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _force_agent_app_mention_payload()
+    body = json.dumps(payload)
+    headers = {"content-type": "application/json", **_signed_headers("test-signing-secret", body)}
+
+    response = async_runner.run(_post_request("/slack/events", content=body, headers=headers))
+    assert response.status_code == 200
+
+    async def fake_run_toolhouse_deeper_review(query_id: str) -> dict[str, object]:
+        return {
+            "status": "answered",
+            "query_id": query_id,
+            "answer_mode": "agent_mode",
+            "rendered_answer": "*Deeper review*\nBest candidates attached as CSV.",
+            "comparison_table": {
+                "title": "Quick comparison",
+                "columns": ["Addr", "SF", "Rent", "Avail"],
+                "rows": [
+                    ["240 Harbor Rd", "62,000 SF", "$18.00/SF", "Aug 2026"],
+                    ["88 Foundry Ln", "44,000 SF", "$21.50/SF", "Q2 2026"],
+                ],
+            },
+            "validation": {"valid": True},
+            "dependency_state": {"toolhouse": True},
+            "toolhouse_fallback": False,
+            "toolhouse_agent_id": "agent-1",
+            "toolhouse_run_id": "run-1",
+            "escalation_payload": {"evidence": [{"id": "ev-1"}, {"id": "ev-2"}], "allowed_evidence_ids": ["ev-1", "ev-2"]},
+            "cited_evidence_ids": ["ev-1", "ev-2"],
+        }
+
+    monkeypatch.setattr("app.workers.query_worker.run_toolhouse_deeper_review", fake_run_toolhouse_deeper_review)
+
+    gateway = RecordingSlackGateway()
+    processed = async_runner.run(process_pending_query_jobs(slack_gateway=gateway, limit=1))
+
+    assert processed[0]["job_type"] == "force_agent"
+    assert processed[0]["deeper_review_status"] == "answered"
+    assert processed[0]["comparison_csv_status"] == "uploaded"
+    assert gateway.uploaded_files
+    assert gateway.uploaded_files[-1]["thread_ts"] == "1715860000.000100"
+    assert gateway.uploaded_files[-1]["filename"].endswith(".csv")
+    csv_rows = list(csv.reader(io.StringIO(gateway.uploaded_files[-1]["content"])))
+    assert csv_rows[0] == ["Addr", "SF", "Rent", "Avail"]
+    assert csv_rows[1] == ["240 Harbor Rd", "62,000 SF", "$18.00/SF", "Aug 2026"]
+
+    query = async_runner.run(_load_latest_query())
+    assert query is not None
     explain_payload = async_runner.run(explain_query(str(query.id)))
     assert explain_payload["reason_codes"] == ["force_agent", "instant_router_skipped"]
     assert explain_payload["slack_context"]["message_ts"] == "1715860000.000300"

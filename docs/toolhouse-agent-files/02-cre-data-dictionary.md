@@ -51,14 +51,26 @@ Important fields:
 - `chunk_id`: best supporting chunk UUID.
 - `address`: display address as extracted.
 - `normalized_address`: canonical comparison address.
-- `property_type`: `office`, `industrial`, `retail`, `mixed_use`, `land`, `multifamily`, or `unknown`.
+- `property_name`, `listing_id`, `source_dataset`: identity and dataset metadata when available.
+- `property_type`: `office`, `industrial`, `retail`, `mixed_use`, `land`, `multifamily`, `hospitality`, `medical`, `data_center`, `self_storage`, `parking`, or `unknown`.
+- `property_subtype`, `asset_class`, `usage_type`: richer property taxonomy and use labels.
+- `status`, `status_date`: listing status such as `available`, `coming_soon`, `under_offer`, `leased`, `sold`, `pipeline`, or `withdrawn`.
 - `sq_ft`: whole square feet.
+- `building_area_sq_ft`, `leasable_area_sq_ft`, `lot_size_sq_ft`, `lot_size_acres`: additional physical size fields.
+- `year_built`, `year_renovated`, `clear_height_ft`, `dock_doors`, `drive_in_doors`, `truck_court_depth_ft`, `trailer_parking_spaces`, `parking_spaces`: physical and industrial attributes.
+- `facing`, `furnishing_status`: orientation/frontage and fit-out state.
 - `price_per_sq_ft`: numeric rent or price per square foot as a string in JSON.
 - `price_basis`: `annual_rent`, `monthly_rent`, `sale_price`, or `unknown`.
+- `asking_rent`, `asking_rent_period`, `rent_currency`, `sale_price`, `price_currency`, `lease_type`: commercial terms when available.
 - `availability`: display availability label.
 - `availability_date`: normalized date when known.
+- `available_from`, `vacancy_status`, `occupancy_status`: availability/occupancy fields when available.
 - `market`: market or submarket.
-- `geo_lat`, `geo_lng`: seeded or geocoded coordinates.
+- `country_code`, `country`, `region`, `state_province`, `county_district`, `city`, `locality`, `neighborhood`, `submarket`, `postal_code`: geography and locality fields.
+- `geo_lat`, `geo_lng`, `geo_point`, `geocode_source`, `geocode_confidence`, `map_url`: coordinates, optional PostGIS geography point, geocode provenance, and map link.
+- `loading_access`, `yard_area_sq_ft`, `cold_storage`, `sprinklered`, `hvac_type`, `nearest_highway`, `highway_distance_miles`, `airport_distance_miles`, `port_distance_miles`, `rail_access`, `public_transit_notes`, `transit_score`, `ev_charging`, `fiber_available`: infrastructure and amenity fields.
+- `additional_information`: free-form remarks/comments captured during ingestion.
+- `amenities_json`, `infrastructure_json`, `financials_json`, `tags_json`, `source_metadata_json`: structured overflow and dataset provenance.
 - `source_page`, `source_row`: citation detail.
 - `extraction_method`: `deterministic`, `heuristic`, `semantic`, or `manual_seed`.
 - `confidence`: extraction confidence.
@@ -129,6 +141,11 @@ Canonical property types:
 - `mixed_use`
 - `land`
 - `multifamily`
+- `hospitality`
+- `medical`
+- `data_center`
+- `self_storage`
+- `parking`
 - `unknown`
 
 Examples:
@@ -159,19 +176,40 @@ Common filters Toolhouse may see or pass to MCP:
   "address_terms": ["120 main st"],
   "uploader_names": ["John", "Sarah", "Maya", "Priya"],
   "markets": ["Downtown", "Harbor District"],
+  "locations": ["Atlanta", "London", "Westside"],
+  "statuses": ["available", "coming_soon"],
+  "usage_types": ["logistics", "office"],
+  "facing": ["corner"],
+  "furnishing_statuses": ["turnkey", "shell"],
+  "infrastructure_terms": ["loading dock", "highway", "fiber"],
   "keywords": ["loading dock", "yard", "logistics", "tenant"],
   "price_per_sq_ft_lt": "25",
   "price_per_sq_ft_gt": null,
+  "sale_price_lt": "5000000",
+  "sale_price_gt": null,
+  "cap_rate_gte": "0.055",
+  "cap_rate_lte": null,
   "sq_ft_gte": 30000,
   "sq_ft_lte": null,
+  "clear_height_ft_gte": "28",
+  "dock_doors_gte": 4,
+  "trailer_parking_spaces_gte": 40,
+  "parking_spaces_gte": 100,
   "availability_before": "2026-08-31",
   "require_immediate": false,
+  "requires_coordinates": true,
   "aggregate": "count | total | average | null",
   "aggregate_field": "property_records | sq_ft | price_per_sq_ft | null",
-  "sort": "price_asc | size_desc | availability_asc | tenant_fit | null",
+  "sort": "price_asc | sale_price_asc | cap_rate_desc | size_desc | availability_asc | tenant_fit | null",
   "limit": 5
 }
 ```
+
+Geospatial notes:
+
+- In PostGIS-capable deployments, Alembic creates `property_records.geo_point` as `geography(Point,4326)`, backfills it from `geo_lng`/`geo_lat`, and keeps it synced with a trigger.
+- In SQLite or non-PostGIS Postgres environments, MCP tools keep using `geo_lat` and `geo_lng` numeric fallback. Treat `nearby_properties.spatial_backend.status` as the runtime truth.
+- `requires_coordinates` filters out records without both numeric coordinates and lets answers expose `map_url` when available.
 
 ## Ranking And Conflict Guidance
 

@@ -10,10 +10,14 @@ The result is a Slack workflow that stays close to existing team habits while ad
 
 - Users can ask standard Slack questions about availability, rent, location, conflicts, data quality, and tenant fit.
 - The app parses PDFs, XLSX, CSV, text files, images, and scanned documents into property facts with source receipts.
+- The local corpus includes the hand-authored demo evidence plus a deterministic 2,400-record generated CRE corpus split into Slack-seedable US and Europe CSV shards.
+- Property facts now cover richer CRE fields: property subtype, usage, status, locality, neighborhood, facing, furnishing, loading access, infrastructure, coordinates, map links, sale/cap-rate terms, parking/loading counts, and `additional_information` remarks.
 - Every factual answer cites its backing row, page, Slack message, source file, sender, channel, and timestamp where available.
-- Postgres handles exact work: filters, proximity, aggregation, source lookup, conflict handling, and prevalidated follow-up SQL templates.
-- Local hybrid retrieval handles source-text questions with BM25S, PolyFuzz, TF-IDF character n-grams, optional Qdrant, and reranking.
+- Postgres handles exact work: filters, optional PostGIS geography proximity, aggregation, source lookup, conflict handling, and prevalidated follow-up SQL templates.
+- Local hybrid retrieval handles source-text questions with BM25S, PolyFuzz, TF-IDF character n-grams, optional Qdrant rich metadata payloads, and reranking.
+- Instant and hybrid routing understands richer query classes including sale-price ceilings, cap-rate floors, clear height, dock/loading doors, trailer/car parking, map-link requests, and coordinate-required searches.
 - Slack actions keep the workflow in-thread: `Show sources`, `Look deeper`, and `Follow Up with Agent ⚡`.
+- Comparison tables stay structured in the backend and become Slack-thread CSV uploads, so dense result sets do not turn into cramped markdown tables.
 - The follow-up modal carries thread evidence forward, shows cached suggested instant follow-ups when prior Toolhouse runs produced them, offers a `Generate suggestions` button when the cache is empty, and uses radio buttons for `Instant`, default `Auto`, and `Agent` routing.
 - `ThreadSession` state accumulates backend-minted evidence IDs and query history per Slack thread, so follow-ups can reuse or escalate the same evidence bundle.
 - Toolhouse coordinates through a narrow MCP surface for schema, context, search, aggregation, inventory summaries, rankings, timelines, conflicts, and query-scoped evidence expansion.
@@ -22,10 +26,12 @@ The result is a Slack workflow that stays close to existing team habits while ad
 
 Current verification:
 
-- `uv run pytest -q` passes 118 tests with no known failures or warning noise.
+- `uv run pytest -q` passes the full test suite with no known failures or warning noise.
 - `uv run cre-cli demo-doctor --live-toolhouse` returns `ready`, including public callback health and live Toolhouse validation with no local fallback.
 - `uv run cre-cli demo-dry-run --live-toolhouse` passes the recording query sequence and returns replay commands for each answer.
 - Two live Slack-visible Toolhouse runs used the new MCP coordinator tools (`summarize_inventory`, `rank_properties`, and `find_property_conflicts`) with backend validation and no fallback.
+- Live Slack CSV verification on 2026-05-21 confirmed that both an instant answer and a `Look deeper` Toolhouse review upload `Quick comparison CSV` files into the same Slack thread.
+- A fresh Graphify rebuild on 2026-05-21 reports 1050 nodes, 1967 edges, and 65 communities after the repo overlay.
 - `uv run cre-cli secret-scan` scans source, docs, config, and sample files with 0 findings.
 
 ## Architecture
@@ -35,7 +41,7 @@ These diagrams break the system into the main loops: Slack intake, ingestion, re
 ### 1. Slack Intake And Job Loop
 
 ```mermaid
-%%{init: {"flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 48, "rankSpacing": 62, "wrappingWidth": 190}, "themeVariables": {"fontSize": "13px"}} }%%
+%%{init: {"flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 64, "rankSpacing": 92, "wrappingWidth": 190}, "themeVariables": {"fontSize": "13px"}} }%%
 flowchart LR
     classDef surface fill:#e8f2ff,stroke:#2563eb,color:#111827
     classDef app fill:#eef2ff,stroke:#4f46e5,color:#111827
@@ -43,19 +49,19 @@ flowchart LR
     classDef config fill:#f8fafc,stroke:#475569,color:#111827
 
     subgraph S["Slack workspace<br/>where brokers ask and review"]
-        direction TB
+        direction LR
         S1["Designated CRE channels<br/>messages, thread replies,<br/>and shared files"]
         S2["Broker mentions the app<br/>with a CRE question"]
         S3["Slack actions<br/>Show sources, Look deeper,<br/>or Follow Up"]
-        S4["Threaded bot reply<br/>answer, source receipt,<br/>and links"]
+        S4["Threaded bot reply<br/>answer, source receipt,<br/>and CSV attachments"]
         S5["Follow-up modal<br/>mode radios plus<br/>one question choice"]
         S6["Generate suggestions<br/>shown when cache<br/>is empty"]
     end
 
     subgraph A["FastAPI Slack agent<br/>fast ack, slow work queued"]
-        direction TB
+        direction LR
         A1["Slack routes<br/>verify signatures,<br/>ack fast, dedupe retries"]
-        A2["Slack runtime and gateway<br/>app mentions, messages,<br/>files, and actions"]
+        A2["Slack runtime and gateway<br/>app mentions, messages,<br/>actions, and file uploads"]
         A3["Health endpoints<br/>/live, /ready,<br/>/health/deps"]
         A4["Modal handling<br/>views_open, views_update,<br/>and submission validation"]
         A6["Suggestion action<br/>generate or refresh<br/>Toolhouse wording only"]
@@ -63,16 +69,16 @@ flowchart LR
     end
 
     subgraph J["Postgres-backed job loop<br/>durable async work"]
-        direction TB
+        direction LR
         J0[("ingestion_jobs<br/>queued, running,<br/>succeeded, failed")]
         J1["answer_query job<br/>route, retrieve, render"]
         J2["Slack ingestion jobs<br/>message or file checkpoint"]
         J3["look_deeper or follow_up job<br/>Toolhouse, local review,<br/>or instant suggestion"]
-        J4["Worker lifecycle<br/>claim, checkpoint, retry,<br/>post or update Slack"]
+        J4["Worker lifecycle<br/>claim, checkpoint, retry,<br/>post, update, or upload"]
     end
 
     subgraph M["Thread memory<br/>per-thread answer context"]
-        direction TB
+        direction LR
         M1["thread_sessions<br/>query history, evidence IDs,<br/>unanswered suggestions"]
     end
 
@@ -113,7 +119,7 @@ flowchart LR
 ### 2. Ingestion To Evidence Store
 
 ```mermaid
-%%{init: {"flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 48, "rankSpacing": 62, "wrappingWidth": 190}, "themeVariables": {"fontSize": "13px"}} }%%
+%%{init: {"flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 64, "rankSpacing": 92, "wrappingWidth": 190}, "themeVariables": {"fontSize": "13px"}} }%%
 flowchart LR
     classDef jobs fill:#fff7ed,stroke:#ea580c,color:#111827
     classDef ingest fill:#ecfdf5,stroke:#059669,color:#111827
@@ -121,13 +127,13 @@ flowchart LR
     classDef vector fill:#f0fdfa,stroke:#0f766e,color:#111827
 
     subgraph J["Ingestion jobs<br/>from Slack or sample import"]
-        direction TB
+        direction LR
         J2["ingest_slack_message<br/>or ingest_slack_file"]
         J4["Worker lifecycle<br/>claim, checkpoint,<br/>retry"]
     end
 
     subgraph I["Ingestion and extraction<br/>one shape for all sources"]
-        direction TB
+        direction LR
         I1["Bounded Slack history<br/>channels, threads,<br/>and recent files"]
         I2["Continuous live ingestion<br/>CRE-signal messages<br/>and supported files"]
         I3["Seed data and live sync<br/>personas, file uploads,<br/>Slack timestamps"]
@@ -137,17 +143,17 @@ flowchart LR
     end
 
     subgraph E["Postgres evidence store<br/>facts plus receipts"]
-        direction TB
+        direction LR
         E0[("System of record<br/>sources, facts, jobs,<br/>answers")]
         E1["source_documents<br/>and slack_source_posts"]
         E2["chunks<br/>page, row, section,<br/>embedding ID"]
-        E3["property_records<br/>and field receipts"]
+        E3["property_records<br/>rich CRE fields,<br/>coordinates, receipts"]
         E4["queries, evidence_items,<br/>answer_snapshots,<br/>thread_sessions"]
         E5["slack_events,<br/>ingestion_jobs,<br/>agent_runs"]
     end
 
     subgraph V["Indexable outputs<br/>used by answers"]
-        direction TB
+        direction LR
         V1["Chunk text<br/>ready for lexical,<br/>fuzzy, and vector search"]
         V2["Canonical CRE facts<br/>ready for filters,<br/>aggregation, proximity"]
     end
@@ -180,7 +186,7 @@ flowchart LR
 ### 3. Retrieval And Answering
 
 ```mermaid
-%%{init: {"flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 48, "rankSpacing": 62, "wrappingWidth": 190}, "themeVariables": {"fontSize": "13px"}} }%%
+%%{init: {"flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 64, "rankSpacing": 92, "wrappingWidth": 190}, "themeVariables": {"fontSize": "13px"}} }%%
 flowchart LR
     classDef jobs fill:#fff7ed,stroke:#ea580c,color:#111827
     classDef store fill:#f8fafc,stroke:#475569,color:#111827
@@ -189,12 +195,12 @@ flowchart LR
     classDef surface fill:#e8f2ff,stroke:#2563eb,color:#111827
 
     subgraph J["Answer job<br/>one Slack question"]
-        direction TB
+        direction LR
         J1["answer_query<br/>persist query, route,<br/>retrieve evidence"]
     end
 
     subgraph E["Postgres evidence store<br/>source-owned truth"]
-        direction TB
+        direction LR
         E1["source_documents<br/>and Slack appearances"]
         E2["chunks<br/>searchable text with<br/>page or row context"]
         E3["property_records<br/>and field-level receipts"]
@@ -202,28 +208,28 @@ flowchart LR
     end
 
     subgraph V["Hybrid retrieval services<br/>local first, semantic optional"]
-        direction TB
+        direction LR
         V0["Alias expansion<br/>retrieval_config.json<br/>query-time only"]
         V6["LocalHybridRetrievalPipeline<br/>RetrievalDocument,<br/>RetrievalHit, result trace"]
         V1["Local lexical stack<br/>BM25S plus substring<br/>fallback"]
         V2["Fuzzy stack<br/>PolyFuzz edit distance<br/>and TF-IDF char n-grams"]
         V3["Reciprocal Rank Fusion<br/>rank merge plus<br/>matched-term gate"]
-        V4["Optional semantic stack<br/>Qdrant vectors plus<br/>local reranker"]
+        V4["Optional semantic stack<br/>Qdrant vectors, rich payloads,<br/>and local reranker"]
         V5["Dependency trace<br/>contributors, disabled deps,<br/>expansion terms"]
     end
 
     subgraph R["Answering and source checks<br/>no unsourced facts"]
-        direction TB
+        direction LR
         R1["Query router<br/>structured, hybrid,<br/>tenant fit, data quality"]
-        R2["Structured retrieval<br/>filters, proximity,<br/>aggregation, conflicts"]
+        R2["Structured retrieval<br/>rich filters, PostGIS or<br/>numeric proximity, aggregation"]
         R3["Hybrid chunk retrieval<br/>local fusion plus<br/>optional vector/rerank"]
-        R4["Answer formatter<br/>Slack markdown, table,<br/>source receipt"]
+        R4["Answer formatter<br/>Slack markdown, CSV attachment,<br/>source receipt"]
         R5["Replay and eval surface<br/>explain-query, replay-query,<br/>eval-golden, demo-dry-run"]
     end
 
     subgraph S["Slack result<br/>visible proof for user"]
-        direction TB
-        S4["Threaded answer<br/>short answer plus<br/>source links"]
+        direction LR
+        S4["Threaded answer<br/>short answer, source links,<br/>comparison CSV"]
         S3["Actions<br/>Show sources, Look deeper,<br/>or Follow Up"]
         S5["Follow-up modal<br/>mode radios plus<br/>cached or generated<br/>suggestions"]
         S6["Generate suggestions<br/>Toolhouse wording task<br/>when cache empty"]
@@ -264,7 +270,7 @@ flowchart LR
 ### 4. Toolhouse Can Review, Not Invent
 
 ```mermaid
-%%{init: {"flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 48, "rankSpacing": 62, "wrappingWidth": 190}, "themeVariables": {"fontSize": "13px"}} }%%
+%%{init: {"flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 64, "rankSpacing": 92, "wrappingWidth": 190}, "themeVariables": {"fontSize": "13px"}} }%%
 flowchart LR
     classDef surface fill:#e8f2ff,stroke:#2563eb,color:#111827
     classDef app fill:#eef2ff,stroke:#4f46e5,color:#111827
@@ -274,20 +280,20 @@ flowchart LR
     classDef toolhouse fill:#fff1f2,stroke:#e11d48,color:#111827
 
     subgraph S["Slack action or modal<br/>user asks for second pass"]
-        direction TB
+        direction LR
         S3["Look deeper or Agent follow-up<br/>same thread,<br/>same or accumulated bundle"]
         S4["Generate suggestions<br/>when modal cache is empty"]
         S6["Refresh suggestions<br/>when cached options<br/>already exist"]
     end
 
     subgraph J["Deeper-review job<br/>queued and replayable"]
-        direction TB
+        direction LR
         J3["look_deeper or follow_up_agent<br/>stores requested query ID"]
         J4["Worker lifecycle<br/>claim, checkpoint, retry,<br/>post or update Slack"]
     end
 
     subgraph A["Backend-owned MCP gate<br/>Toolhouse can coordinate,<br/>not mutate"]
-        direction TB
+        direction LR
         A4["CRE Backend MCP<br/>/toolhouse/mcp<br/>bearer and URL-token auth"]
         A1["Explain and schema tools<br/>explain evidence, explain query,<br/>describe backend schema"]
         A2["Context and search tools<br/>expand context, search properties,<br/>chunks, sources, nearby"]
@@ -296,7 +302,7 @@ flowchart LR
     end
 
     subgraph T["Toolhouse deeper review<br/>reasoning over allowed evidence"]
-        direction TB
+        direction LR
         T0["suggest_followups task<br/>allowed kind plus question,<br/>no facts or SQL"]
         T1["Toolhouse Workers API<br/>remote agent run"]
         T2["Toolhouse worker<br/>comparison and synthesis"]
@@ -307,7 +313,7 @@ flowchart LR
     end
 
     subgraph E["Allowed evidence package<br/>backend-selected inputs"]
-        direction TB
+        direction LR
         E1["source_documents<br/>and Slack appearances"]
         E2["chunks<br/>source text snippets"]
         E3["property_records<br/>and field receipts"]
@@ -318,8 +324,8 @@ flowchart LR
     end
 
     subgraph R["Validated Slack update<br/>posted only after checks"]
-        direction TB
-        R4["Answer formatter<br/>Slack markdown, table,<br/>source receipt"]
+        direction LR
+        R4["Answer formatter<br/>Slack markdown, CSV attachment,<br/>source receipt"]
     end
 
     S3 --> J3 --> J4 --> T1 --> T2
@@ -357,7 +363,7 @@ flowchart LR
 ### 5. Verification And Readiness Loop
 
 ```mermaid
-%%{init: {"flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 48, "rankSpacing": 62, "wrappingWidth": 190}, "themeVariables": {"fontSize": "13px"}} }%%
+%%{init: {"flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 64, "rankSpacing": 92, "wrappingWidth": 190}, "themeVariables": {"fontSize": "13px"}} }%%
 flowchart LR
     classDef ops fill:#fefce8,stroke:#ca8a04,color:#111827
     classDef app fill:#eef2ff,stroke:#4f46e5,color:#111827
@@ -366,38 +372,38 @@ flowchart LR
     classDef jobs fill:#fff7ed,stroke:#ea580c,color:#111827
 
     subgraph O["Operator and verification commands<br/>proof around the runtime"]
-        direction TB
+        direction LR
         O1["CLI and Make targets<br/>status, import, index,<br/>recover-demo"]
         O2["Golden evals and doctor<br/>routes, evidence, deps,<br/>public callback"]
         O3["Dry run and report<br/>recording prompts, replay IDs,<br/>talking points"]
         O4["Secret scan<br/>source, docs, config,<br/>sample files"]
-        O5["Graphify map<br/>767 nodes, 1345 edges,<br/>56 communities"]
-        O6["Expanded test battery<br/>118 tests, sample corpus,<br/>hybrid, Slack, MCP"]
+        O5["Graphify map<br/>1050 nodes, 1967 edges,<br/>65 communities"]
+        O6["Expanded test battery<br/>sample corpus, hybrid,<br/>Slack, MCP, geospatial"]
         O8["Modal suggestion checks<br/>cached-first open,<br/>Generate button, answer cache"]
-        O7["Live Toolhouse proof<br/>Slack-visible runs used<br/>new coordinator tools"]
+        O7["Live Toolhouse proof<br/>coordinator tools plus<br/>threaded CSV uploads"]
     end
 
     subgraph A["Runtime checks<br/>dependency truth at startup"]
-        direction TB
+        direction LR
         A3["Health endpoints<br/>/live, /ready,<br/>/health/deps"]
         A5["Settings and migrations<br/>.env config, Alembic,<br/>SQLAlchemy models"]
     end
 
     subgraph J["State and workers<br/>durable async behavior"]
-        direction TB
+        direction LR
         J0[("ingestion_jobs<br/>queued, running,<br/>succeeded, failed")]
         J4["Worker lifecycle<br/>claim, checkpoint, retry,<br/>post or update Slack"]
     end
 
     subgraph E["Persisted proof<br/>what answers can replay"]
-        direction TB
+        direction LR
         E4["queries, evidence_items,<br/>answer_snapshots,<br/>thread_sessions"]
         E5["slack_events,<br/>ingestion_jobs,<br/>agent_runs"]
     end
 
     subgraph R["Inspectable answer surface<br/>debuggable from CLI or Slack"]
-        direction TB
-        R4["Answer formatter<br/>Slack markdown, table,<br/>source receipt"]
+        direction LR
+        R4["Answer formatter<br/>Slack markdown, CSV attachment,<br/>source receipt"]
         R5["Replay and eval surface<br/>explain-query, replay-query,<br/>eval-golden"]
     end
 
@@ -428,7 +434,21 @@ flowchart LR
     class R4,R5 answer
 ```
 
-The diagrams are separated to keep each loop readable. README coverage was checked against a fresh Graphify rebuild, which now shows 767 nodes, 1345 edges, and 56 communities. That pass made the less-visible pieces explicit: local hybrid retrieval, CLI checks, worker state, Slack delivery, cached-first follow-up modal state, explicit Generate suggestions behavior, Toolhouse MCP auth, and the verification loop.
+The diagrams are separated to keep each loop readable, and each subgraph is laid out left-to-right so the boxes spread across the page instead of stacking into tall columns. README coverage was checked against a fresh Graphify rebuild, whose generated report now shows 1050 nodes, 1967 edges, and 65 communities. That pass made the less-visible pieces explicit: local hybrid retrieval, CSV file delivery, CLI checks, worker state, Slack delivery, cached-first follow-up modal state, explicit Generate suggestions behavior, Toolhouse MCP auth, and the verification loop.
+
+Graphify's current community map lines up with the runtime pipelines this README describes:
+
+| Graphify hub | Runtime responsibility |
+| --- | --- |
+| `service.py / enqueue_app_mention_event()` | Slack event intake, retries, action handlers, modal state, trust receipts, and CSV attachment preparation. |
+| `query_worker.py / process_pending_query_jobs()` | The durable job loop that claims queued work, posts pending status, runs answer/ingestion/Toolhouse jobs, updates Slack, and uploads comparison CSVs. |
+| `query_service.py / answer_query()` | The central answer pipeline: route, retrieve, build evidence, render Slack markdown, create comparison tables, and persist snapshots. |
+| `query_constructor.py / build_structured_query_spec()` and `structured_service.py / retrieve_structured_property_matches()` | Structured filters, inventory summaries, numeric thresholds, map/coordinate intent, dedupe, and no-result explanations. |
+| `LocalHybridRetrievalPipeline / RetrievalDocument` and `hybrid_service.py / retrieve_loading_access_matches()` | Local lexical, fuzzy, alias-expanded, and optional semantic retrieval for messy source-text questions. |
+| `sample_importer.py / import_sample_dataset()` and `slack_ingestor.py / enqueue_slack_ingestion_event()` | Local sample import, live Slack source resolution, file/message checkpoints, parser handoff, and source receipt storage. |
+| `tools.py / _serialize_property_record()` and `evidence_context.py / build_evidence_context()` | Toolhouse-facing MCP tools, evidence expansion, property/source serialization, rankings, timelines, conflicts, and allowed-evidence packaging. |
+| `follow_up_suggestions.py / _uuid_strings()` and `thread_sessions.py / assess_evidence_coverage()` | Thread memory, accumulated evidence, suggested follow-up cache state, and auto/agent coverage decisions. |
+| `cli.py / main()`, `golden.py / _evaluate_case()`, and `submission.py / scan_workspace_for_secrets()` | Operator commands, evals, doctor/dry-run, replay, reports, and secret scanning. |
 
 The core boundary is simple: Postgres keeps the source trail, facts, jobs, selected evidence, answer snapshots, thread sessions, and Toolhouse run logs. Toolhouse can coordinate a deeper second pass through MCP, but the backend still owns the facts and citation gate.
 
@@ -437,7 +457,7 @@ The core boundary is simple: Postgres keeps the source trail, facts, jobs, selec
 The app has three ways to learn about CRE data: a local sample import for repeatable demos, a bounded historical Slack backfill, and live Slack events. All three paths are shaped into the same internal dataset model before parsing, extraction, storage, and indexing. That is intentional: a golden query against local sample data should exercise the same tables and answer code as a query against live Slack data.
 
 ```mermaid
-%%{init: {"flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 48, "rankSpacing": 62, "wrappingWidth": 190}, "themeVariables": {"fontSize": "13px"}} }%%
+%%{init: {"flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 64, "rankSpacing": 92, "wrappingWidth": 190}, "themeVariables": {"fontSize": "13px"}} }%%
 flowchart LR
     classDef entry fill:#e8f2ff,stroke:#2563eb,color:#111827
     classDef gate fill:#fff7ed,stroke:#ea580c,color:#111827
@@ -447,14 +467,14 @@ flowchart LR
     classDef quality fill:#fefce8,stroke:#ca8a04,color:#111827
 
     subgraph E["Entry points<br/>three ways data arrives"]
-        direction TB
+        direction LR
         E1["Local sample import<br/>manifest plus sample files"]
         E2["Historical Slack backfill<br/>recent channel history<br/>and thread replies"]
         E3["Live Slack events<br/>message and file_shared<br/>callbacks"]
     end
 
     subgraph G["Gate and queue<br/>ack fast, process later"]
-        direction TB
+        direction LR
         G1["Allowed channels<br/>disabled, files_only,<br/>listings_only, evidence"]
         G2["Noise checks<br/>bots, empty events,<br/>unsupported subtypes,<br/>query-like chatter"]
         G3[("slack_events<br/>retry metadata<br/>and payload hash")]
@@ -462,25 +482,25 @@ flowchart LR
     end
 
     subgraph R["Resolve source<br/>Slack metadata becomes importer input"]
-        direction TB
+        direction LR
         R1["Message checkpoint<br/>permalink plus raw<br/>Slack text"]
         R2["File checkpoint<br/>files.info, title/name match,<br/>private download"]
         R3["SampleDatasetModel<br/>same shape for<br/>sample and live"]
     end
 
     subgraph P["Parse and extract<br/>source-aware chunking"]
-        direction TB
+        direction LR
         P1["Native parsers<br/>CSV rows, XLSX sheets,<br/>PDF pages, text"]
         P2["OCR fallback<br/>GLM-OCR for images<br/>and scanned PDFs"]
         P3["CRE signal extraction<br/>address, type, SF, rent,<br/>availability, market"]
     end
 
     subgraph S["Persist, index, and audit<br/>source trail stays attached"]
-        direction TB
+        direction LR
         S1[(source_documents)]
         S2[(slack_source_posts)]
         S3[("chunks<br/>page, row, section")]
-        S4[(property_records)]
+        S4[(property_records<br/>rich facts and geo)]
         S5[(property_field_values)]
         S6["Optional vector indexing<br/>Qdrant embedding IDs"]
         S7["Quality report<br/>missing fields, context-only<br/>sources, conflicts"]
@@ -525,7 +545,9 @@ Live ingestion is also conservative. Each Slack delivery is recorded in `slack_e
 
 Message jobs and file jobs converge quickly. A message job resolves the Slack permalink and stores the message text. A file job resolves Slack file metadata, downloads supported files into the local Slack download directory, and records file name, MIME type, Slack file ID, source URL, and local path. From there both paths use `SampleDatasetModel`, so local demos and live Slack ingestion share the same importer.
 
-Parsing is source-aware. CSV files become row chunks. XLSX files become sheet-and-row chunks. PDFs keep page numbers when text extraction works; scanned PDFs and images go through GLM-OCR when OCR is enabled. Text files and Slack messages stay as text chunks. Those chunks feed heuristic CRE extraction for addresses, property type, square footage, rent, availability, market, source authority, freshness, and confidence.
+Parsing is source-aware. CSV files become row chunks. XLSX files become sheet-and-row chunks. PDFs keep page numbers when text extraction works; scanned PDFs and images go through GLM-OCR when OCR is enabled. Text files and Slack messages stay as text chunks. Those chunks feed heuristic CRE extraction for addresses, property type, square footage, rent, availability, market, status, locality/neighborhood, coordinates, map links, infrastructure fields, additional remarks, source authority, freshness, and confidence.
+
+The sample importer also merges generated manifest fragments from [sample-data/generated](sample-data/generated), so `uv run cre-cli import-samples` loads both the small hand-authored demo corpus and the generated global corpus. The generated shards are deterministic demo enrichment: public geospatial-style locality metadata plus synthetic commercial property profiles, tagged in source metadata rather than presented as scraped listing truth.
 
 Import is an upsert, not a blind append. The importer checks Slack file IDs, Slack message timestamps, local paths, and content hashes to reuse existing sources where appropriate. Before re-importing a source, it clears old child chunks, property records, and source-scoped jobs, then writes fresh chunks, property records, field values, Slack source appearances, and succeeded extract/index job records. If vector indexing is enabled, new chunk IDs are embedded and written to Qdrant.
 
@@ -599,14 +621,33 @@ erDiagram
         uuid chunk_id FK
         string address
         string normalized_address
+        string property_name
+        string listing_id
         string property_type
+        string property_subtype
+        string usage_type
+        string status
         int sq_ft
         decimal price_per_sq_ft
+        decimal asking_rent
         string availability
         date availability_date
+        date available_from
         string market
+        string country_code
+        string city
+        string locality
+        string neighborhood
+        string submarket
         decimal geo_lat
         decimal geo_lng
+        string map_url
+        string facing
+        string furnishing_status
+        string loading_access
+        string nearest_highway
+        text additional_information
+        json infrastructure_json
         decimal source_authority_score
         decimal freshness_score
         string duplicate_group_key
@@ -712,7 +753,7 @@ How the schema is meant to be read:
 - `source_documents` is the canonical source table. It covers Slack messages, thread replies, PDFs, CSVs, XLSX files, text notes, and OCR output.
 - `slack_source_posts` records where a source showed up in Slack, so repeated shares keep their own channel, sender, timestamp, and permalink context.
 - `chunks` holds the text used for search. Page, row, section, embedding ID, and metadata stay attached to the chunk.
-- `property_records` stores facts as they appeared in a source. It does not try to merge everything into one perfect property entity too early. Likely duplicates are grouped with `duplicate_group_key` and resolved when an answer is built.
+- `property_records` stores facts as they appeared in a source, including rich commercial profile fields, geography, coordinates, map URLs, infrastructure notes, furnishing/facing/status labels, and free-form `additional_information`. It does not try to merge everything into one perfect property entity too early. Likely duplicates are grouped with `duplicate_group_key` and resolved when an answer is built.
 - `property_field_values` keeps the field-level audit trail: raw value, normalized value, confidence, method, source span, and extractor version.
 - `queries`, `evidence_items`, and `answer_snapshots` are the answer trail. `Show sources`, `explain-query`, `replay-query`, and Toolhouse escalation all read from that trail.
 - `thread_sessions` keeps the Slack thread memory: accumulated evidence IDs, query history, modal suggestion metadata, and follow-up context.
@@ -722,7 +763,7 @@ How the schema is meant to be read:
 ### How Routing Works
 
 ```mermaid
-%%{init: {"flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 48, "rankSpacing": 62, "wrappingWidth": 190}, "themeVariables": {"fontSize": "13px"}} }%%
+%%{init: {"flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 64, "rankSpacing": 92, "wrappingWidth": 190}, "themeVariables": {"fontSize": "13px"}} }%%
 flowchart LR
     classDef question fill:#e8f2ff,stroke:#2563eb,color:#111827
     classDef router fill:#eef2ff,stroke:#4f46e5,color:#111827
@@ -732,9 +773,9 @@ flowchart LR
     classDef agent fill:#fff1f2,stroke:#e11d48,color:#111827
 
     Q["Slack question<br/>plain broker wording"] --> P["build_query_plan<br/>records route, confidence,<br/>reason codes"]
-    P --> C["Query constructor<br/>inventory intent, addresses,<br/>markets, prices, size,<br/>timing, tenant-fit intent"]
+    P --> C["Query constructor<br/>inventory, addresses, markets,<br/>sale/rent, cap rate, physical fields,<br/>maps, tenant-fit intent"]
     C --> S{"Route decision<br/>deterministic plan"}
-    S -->|structured instant| I["Structured Postgres path<br/>filters, proximity,<br/>aggregation, conflicts"]
+    S -->|structured instant| I["Structured Postgres path<br/>filters, PostGIS or numeric proximity,<br/>aggregation, conflicts"]
     S -->|local hybrid| X["Alias expansion<br/>query-time only,<br/>retrieval_config.json"]
     X --> H["LocalHybridRetrievalPipeline<br/>BM25S, substring,<br/>PolyFuzz, TF-IDF char n-grams"]
     H --> RF["Reciprocal Rank Fusion<br/>rank merge plus<br/>feature-term gate"]
@@ -744,7 +785,7 @@ flowchart LR
     O --> E
     U --> A["AnswerSnapshot<br/>saved answer and<br/>dependency state"]
     E --> A
-    A --> B["Slack answer blocks<br/>source receipt, table,<br/>actions"]
+    A --> B["Slack answer blocks<br/>source receipt, CSV attachment,<br/>actions"]
     B --> D["Show sources<br/>ephemeral evidence view"]
     B --> L["Look deeper<br/>queue agent review"]
     B --> FU["Follow Up with Agent<br/>open modal, mode radio,<br/>choose suggestion or custom"]
@@ -765,18 +806,18 @@ flowchart LR
     class T agent
 ```
 
-The router is small by design. For each question it writes down the route, query type, confidence, reason codes, and filters it used. A few golden paths cover the highest-value operating questions. The generic query constructor handles the broader cases: broad inventory wording, property type aliases, known addresses, markets, uploader names, keywords, price and size thresholds, availability windows, aggregation, sorting, limits, missing-data terms, and tenant-fit wording.
+The router is small by design. For each question it writes down the route, query type, confidence, reason codes, and filters it used. A few golden paths cover the highest-value operating questions. The generic query constructor handles the broader cases: broad inventory wording, property type aliases, known addresses, markets, location/locality terms, status, usage, facing, furnishing, infrastructure terms, uploader names, keywords, rent/sale/cap-rate thresholds, clear height, dock doors, trailer/car parking, coordinate/map intent, size thresholds, availability windows, aggregation, sorting, limits, missing-data terms, and tenant-fit wording.
 
 | Query class | Route | What happens |
 | --- | --- | --- |
-| Proximity | `instant` | Recognizes seeded anchors like `123 Main Street`, computes Haversine distance from stored coordinates, sorts nearest available properties, and cites the supporting source rows. |
-| Numeric filters | `instant` | Turns prompts like office under `$50/SF` into SQL predicates over `property_type` and `price_per_sq_ft`. |
+| Proximity | `instant` | Recognizes seeded anchors like `123 Main Street`, uses PostGIS geography when ready or numeric Haversine fallback from stored coordinates, sorts nearest available properties, and cites the supporting source rows. |
+| Numeric filters | `instant` | Turns prompts like office under `$50/SF`, sale under `$5M`, cap rate above `5%`, clear height over `28 ft`, or at least `4 dock doors` into SQL predicates over normalized property columns. |
 | Aggregation | `instant` | Resolves source/uploader references such as John's industrial files, dedupes by `duplicate_group_key`, and sums `sq_ft` in Postgres. |
 | Exact/source lookup | `instant` | Matches normalized address plus field value, then returns the source rows/pages where the value appeared. |
 | Conflict review | `hybrid` | Uses a duplicate group such as Harbor Rd, orders candidates by source authority, freshness, and posting time, then labels evidence as selected, supporting, or superseded. |
 | Loading or yard language | `hybrid` | Expands aliases such as dock doors, truck court, and trailer parking, then fuses BM25, substring, PolyFuzz edit distance, TF-IDF character n-gram, and optional Qdrant/rerank candidates. |
 | Inventory overview | `instant` | Treats prompts like `list all properties` or `what do we have` as a broad structured query, returns a sourced inventory snapshot, and leaves a ready evidence bundle for `Look deeper`. |
-| Generic structured search | `instant` | Builds a transparent query constructor with conditions, sort, and limit, then returns deduped structured matches. |
+| Generic structured search | `instant` | Builds a transparent query constructor with conditions, sort, and limit, then returns deduped structured matches, including map links when coordinates are requested. |
 | Tenant fit | `hybrid` | Runs a local heuristic over price, size, availability, source quality, and logistics terms, then invites `Look deeper` for Toolhouse review. |
 | Data quality | `instant` | Scans indexed sources and property rows for missing fields, sources without chunks/properties, and duplicate groups with conflicting numeric facts. |
 | Unsupported | `failed` | Refuses to guess, returns the supported query patterns, and still offers `Look deeper` so Toolhouse can broaden through MCP or report missing evidence. |
@@ -788,8 +829,9 @@ A key distinction: `hybrid` does not mean the system is improvising. It still me
 The ranking rules are meant to be easy to audit:
 
 - Structured matches score field coverage plus source quality: matched-field count, `source_authority_score`, `freshness_score`, and extraction confidence. Dedupe keeps the strongest row per `duplicate_group_key`.
-- Sort requests are explicit: cheapest sorts by `price_per_sq_ft`, largest by `sq_ft`, and soonest availability by `availability_date`.
+- Sort requests are explicit: cheapest rent sorts by `price_per_sq_ft`, cheapest sale sorts by `sale_price`, strongest yield sorts by `cap_rate`, largest sorts by `sq_ft`, and soonest availability sorts by `availability_date`.
 - Generic structured searches return the top deduped records after filters and sort. Exact lookups can keep multiple rows so source agreement or conflict is visible.
+- Rich filters can target locations, statuses, usage types, facing, furnishing, sale/cap-rate terms, clear height, dock doors, trailer/car parking, coordinates, and infrastructure terms without exposing raw SQL to Slack or Toolhouse.
 - Loading-access retrieval uses configurable alias expansion, BM25S lexical ranking, PolyFuzz edit-distance matching, TF-IDF character n-grams, optional Qdrant candidates, and Reciprocal Rank Fusion. A listing that matches multiple concrete feature terms still outranks a weaker partial match, all else equal.
 - Vector retrieval combines Qdrant and rerank scores as `0.35 * vector_score + 0.65 * rerank_score` when rerank is available; otherwise it uses the clamped vector score.
 - Tenant-fit local scoring uses source quality, near-term availability, price under `$35/SF`, scale above `15,000 SF`, and logistics terms such as loading dock, yard, and trailer storage.
@@ -812,7 +854,7 @@ Hybrid search is conservative. Local lexical and fuzzy retrieval are the baselin
 1. Query-time expansion reads [app/retrieval/retrieval_config.json](app/retrieval/retrieval_config.json). The source corpus is not mutated; the expanded terms live only on the query path and are recorded in `dependency_state_json`.
 2. BM25S ranks the in-memory chunk corpus lexically. A standard-library substring retriever remains available as a simple fallback when exact configured terms are enough.
 3. PolyFuzz edit distance handles typos, shorthand, partial names, and alias phrasing. TF-IDF character n-grams add another lightweight signal for noisy text overlap.
-4. Optional Qdrant retrieval embeds `chunks.chunk_text` with `qwen3-embedding-0_6b-q8_0`, retrieves `cre_chunks`, and joins candidate chunk IDs back to Postgres. The existing `qwen3-reranker-0.6b` endpoint is exposed as a final rerank hook when vector search is enabled.
+4. Optional Qdrant retrieval embeds `chunks.chunk_text` with `qwen3-embedding-0_6b-q8_0`, retrieves `cre_chunks` with rich payload metadata such as addresses, property types, markets, statuses, usage types, localities, neighborhoods, map URLs, and geo points, then joins candidate chunk IDs back to Postgres. The existing `qwen3-reranker-0.6b` endpoint is exposed as a final rerank hook when vector search is enabled.
 5. Candidate lists are merged with Reciprocal Rank Fusion, so each layer can keep its own scoring scale. Final evidence is deduped by `duplicate_group_key`, scored with relevance, authority, freshness, and matched feature coverage, then persisted exactly like structured evidence.
 6. Loading-access search still requires concrete expanded-term hits in the chunk text. A broad semantic match without the expected source language does not become evidence.
 7. `dependency_state_json` records layer status, contributors, query expansion terms, Qdrant/rerank usage, and disabled dependencies, so replay can explain why the answer looked the way it did.
@@ -869,7 +911,7 @@ A broker can ask:
 | `Follow Up with Agent ⚡` | Opens a thread-aware modal with cached instant suggestions when available, `Generate suggestions` when empty, a mutually exclusive custom question option, and `Instant` / `Auto` / `Agent` mode radios. |
 | `/force-agent where is this located and what is the best use case` | Direct-to-Toolhouse path for ambiguous follow-ups when the user wants MCP grounding before any local instant interpretation. |
 
-Every factual answer includes a small source receipt: which route was used, how many evidence items were checked, and why those sources were selected. `Show sources` opens the rows, pages, files, and Slack messages behind the answer. `replay-query` rebuilds the stored answer outside Slack.
+Every factual answer includes a small source receipt: which route was used, how many evidence items were checked, and why those sources were selected. `Show sources` opens the rows, pages, files, and Slack messages behind the answer. When the backend payload includes a structured `comparison_table`, Slack uploads it as a thread CSV such as `quick-comparison-<query>.csv` instead of rendering a cramped inline table. `replay-query` rebuilds the stored answer outside Slack.
 
 ## Why It Is Credible
 
@@ -890,6 +932,7 @@ Local development uses Python 3.12 and `uv`.
 ```bash
 uv sync
 make recover-demo
+uv run cre-cli build-large-corpus --rows 2400 --seed 20260519
 uv run cre-cli import-samples
 uv run cre-cli index-chunks --reset
 uv run cre-cli demo-doctor --skip-public-callback
@@ -918,11 +961,15 @@ For the live Slack environment used here:
 
 - FastAPI app: `http://127.0.0.1:8020`
 - Public callback: `https://slack.aqwerty321.me`
+- Postgres image: `postgis/postgis:16-3.4-alpine` for optional `geo_point` geography support, with numeric coordinate fallback when PostGIS is unavailable.
 - Qdrant collection: `cre_chunks`
+- Qdrant payload: chunk text plus rich property/location metadata (`map_urls`, `geo_points`, statuses, usage types, cities, localities, neighborhoods, and submarkets).
 - Embeddings: `qwen3-embedding-0_6b-q8_0`
 - Rerank: `qwen3-reranker-0.6b`
 - OCR: GLM-OCR at `http://127.0.0.1:5003`
 - Toolhouse Agent ID: `0c2c4555-5d96-47e4-8e05-f956de7a102e`
+
+Existing local Postgres containers created from the old non-PostGIS image keep working through numeric coordinate fallback. To activate the `geo_point` column in an already-initialized local database, recreate the compose Postgres service with the PostGIS image and run the latest Alembic migrations. [scripts/recover-demo-stack.sh](scripts/recover-demo-stack.sh) now applies migrations after Postgres is healthy.
 
 Use `.env.example` as the non-secret template. Local `.env` values are intentionally excluded from the source secret scan.
 
@@ -935,19 +982,21 @@ uv run cre-cli demo-doctor --live-toolhouse
 uv run cre-cli demo-dry-run --live-toolhouse
 uv run cre-cli secret-scan
 uv run cre-cli submission-report --format markdown --output .runtime/submission-report.md
+./.opencode/scripts/build-graphify
 ```
 
 ## Project Shape
 
 - [app/main.py](app/main.py) creates the FastAPI app and worker lifecycle.
 - [app/slack/](app/slack) owns Slack intake, answer rendering, source actions, and seed-data sync.
-- [app/ingestion/](app/ingestion) handles sample import, Slack backfill, live ingestion, source receipts, and quality checks.
+- [app/ingestion/](app/ingestion) handles sample import, generated large-corpus building, Slack backfill, live ingestion, source receipts, and quality checks.
 - [app/extraction/](app/extraction) parses native files and routes image/scanned-document OCR.
 - [app/retrieval/](app/retrieval) and [app/routing/](app/routing) implement structured, hybrid, tenant-fit, and data-quality retrieval, including configurable aliases and retrieval weights in [app/retrieval/retrieval_config.json](app/retrieval/retrieval_config.json).
 - [app/answering/query_service.py](app/answering/query_service.py), [app/answering/thread_sessions.py](app/answering/thread_sessions.py), and [app/answering/follow_up_suggestions.py](app/answering/follow_up_suggestions.py) write queries, evidence items, answer snapshots, thread memory, and suggested follow-up answers.
 - [app/toolhouse/](app/toolhouse) contains the Workers API client, local deeper-review fallback, MCP server, backend tools, and citation validator.
 - [app/evaluation/](app/evaluation) provides golden evals, replay, readiness checks (`demo-doctor`, `demo-dry-run`), secret scan, and submission report generation.
 - [tests/](tests) covers golden answers, Slack loop behavior, ingestion, parsers, Toolhouse tools/client/MCP, and readiness commands.
+- [graphify-out/GRAPH_REPORT.md](graphify-out/GRAPH_REPORT.md) and [graphify-out/wiki/index.md](graphify-out/wiki/index.md) are regenerated local graph artifacts used to map repo hubs and architecture coverage.
 
 ## Submission Notes
 

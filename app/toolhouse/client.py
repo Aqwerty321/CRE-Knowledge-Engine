@@ -16,6 +16,8 @@ from app.toolhouse.local_agent import build_escalation_payload, run_local_deeper
 
 TOOLHOUSE_AGENT_ID = "0c2c4555-5d96-47e4-8e05-f956de7a102e"
 TOOLHOUSE_BASE_URL = "https://agents.toolhouse.ai"
+EMPTY_RESPONSE_RETRY_COUNT = 1
+ACCEPTABLE_LIVE_TOOLHOUSE_STATUSES = frozenset({"answered", "needs_more_evidence", "external_context_only", "validation_risk"})
 
 
 @dataclass(frozen=True)
@@ -137,6 +139,18 @@ def build_toolhouse_message(escalation_payload: dict[str, Any]) -> str:
     return json.dumps(message_payload, indent=2, sort_keys=True)
 
 
+def is_acceptable_live_toolhouse_outcome(payload: dict[str, Any]) -> bool:
+    validation = dict(payload.get("validation") or {})
+    dependency_state = dict(payload.get("dependency_state") or {})
+    status = str(payload.get("status") or "")
+    return (
+        status in ACCEPTABLE_LIVE_TOOLHOUSE_STATUSES
+        and validation.get("valid") is True
+        and dependency_state.get("toolhouse") is True
+        and not payload.get("toolhouse_fallback")
+    )
+
+
 def _slack_thread_for_suggestions(escalation_payload: dict[str, Any]) -> tuple[str, str]:
     thread_session = escalation_payload.get("thread_session") if isinstance(escalation_payload.get("thread_session"), dict) else {}
     slack_context = escalation_payload.get("slack_context") if isinstance(escalation_payload.get("slack_context"), dict) else {}
@@ -241,6 +255,7 @@ async def run_toolhouse_deeper_review(
     client: ToolhouseClient | None = None,
 ) -> dict[str, Any]:
     escalation_payload = await build_escalation_payload(query_id)
+    toolhouse_message = build_toolhouse_message(escalation_payload)
     active_client = client or _configured_client()
     initial_provider = "toolhouse" if active_client is not None else "local"
     agent_run_id = await _create_agent_run(query_id, provider=initial_provider, escalation_payload=escalation_payload)
@@ -284,7 +299,7 @@ async def run_toolhouse_deeper_review(
         return payload
 
     try:
-        result = await active_client.send_message(build_toolhouse_message(escalation_payload))
+        result = await active_client.send_message(toolhouse_message)
     except (aiohttp.ClientError, TimeoutError) as exc:
         local_payload = await run_local_deeper_review(query_id)
         payload = _fallback_with_toolhouse_error(local_payload, error=f"transport_error: {exc}")
@@ -303,9 +318,38 @@ async def run_toolhouse_deeper_review(
         payload["agent_run_id"] = str(agent_run_id)
         return payload
 
+    empty_response_retry_attempts = 0
+    while result.response_payload is None and result.parse_error == "empty_response" and empty_response_retry_attempts < EMPTY_RESPONSE_RETRY_COUNT:
+        empty_response_retry_attempts += 1
+        try:
+            result = await active_client.send_message(toolhouse_message, run_id=result.run_id)
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            local_payload = await run_local_deeper_review(query_id)
+            payload = _fallback_with_toolhouse_error(
+                local_payload,
+                error=f"empty_response_retry_transport_error: {exc}",
+                run_id=result.run_id,
+            )
+            await _finish_agent_run(
+                agent_run_id,
+                provider="local_fallback",
+                status=str(payload.get("status") or "unknown"),
+                answer_mode=str(payload.get("answer_mode") or "agent_mode"),
+                cited_evidence_ids_json=[str(value) for value in payload.get("cited_evidence_ids", [])],
+                validation_json=dict(payload.get("validation") or {}),
+                dependency_state_json=dict(payload.get("dependency_state") or {}),
+                fallback_reason=f"empty_response_retry_transport_error: {exc}",
+                rendered_answer=str(payload.get("rendered_answer") or ""),
+                response_payload_json={},
+                toolhouse_run_id=result.run_id,
+            )
+            payload["agent_run_id"] = str(agent_run_id)
+            return payload
+
     if result.response_payload is None:
         local_payload = await run_local_deeper_review(query_id)
-        error = f"parse_error: {result.parse_error}"
+        retry_suffix = "_after_retry" if empty_response_retry_attempts else ""
+        error = f"parse_error: {result.parse_error}{retry_suffix}"
         payload = _fallback_with_toolhouse_error(
             local_payload,
             error=error,
@@ -381,6 +425,8 @@ async def run_toolhouse_deeper_review(
         "toolhouse_response": response_payload,
         "escalation_payload": validation_payload,
     }
+    if empty_response_retry_attempts:
+        payload["dependency_state"]["toolhouse_empty_response_retry"] = True
     try:
         next_follow_up_suggestions = await _store_toolhouse_answer_followups(
             response_payload=response_payload,
@@ -413,10 +459,12 @@ async def run_toolhouse_deeper_review(
 
 
 __all__ = [
+    "ACCEPTABLE_LIVE_TOOLHOUSE_STATUSES",
     "TOOLHOUSE_AGENT_ID",
     "ToolhouseClient",
     "ToolhouseRunResult",
     "build_toolhouse_message",
+    "is_acceptable_live_toolhouse_outcome",
     "parse_toolhouse_response_payload",
     "run_toolhouse_deeper_review",
 ]

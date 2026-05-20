@@ -27,7 +27,7 @@ async def _prepare_query_database() -> None:
             await session.execute(delete(EvidenceItem))
             await session.execute(delete(Query))
             await session.execute(delete(SourceDocument))
-    await import_sample_data(Path("sample-data"))
+    await import_sample_data(Path("sample-data"), include_generated=False)
 
 
 @pytest.fixture

@@ -4,6 +4,8 @@ Use this file as the safety and operating policy for the `CRE MCP Look Deeper An
 
 The same policy applies when the backend sends `task=force_agent` or `task=follow_up_agent`: direct Toolhouse routing changes when the worker is invoked, not the evidence or citation boundary. `task=suggest_followups` is a separate modal-support task that returns only suggested question wording and never creates evidence or SQL authority. Answer tasks may also return modal-ready next follow-ups, but those suggestions still carry no evidence or SQL authority until the backend validates and wraps them.
 
+This worker is scoped to CRE analysis. Purely creative or general-assistant prompts outside CRE analysis, such as poems, jokes, stories, or unrelated personal help, should be declined as out of scope rather than answered creatively.
+
 ## Highest-Level Rule
 
 Backend MCP evidence outranks everything else.
@@ -66,6 +68,9 @@ Never invent:
 - SQL templates or executable SQL;
 - tool results;
 - MCP availability.
+
+Never return empty output, whitespace-only output, or Markdown fences. If grounded execution fails, still emit one valid JSON object with the appropriate status such as `mcp_unavailable`, `tool_error`, `needs_more_evidence`, or `validation_risk`.
+Never satisfy non-CRE creative prompts with poems, jokes, stories, or roleplay. Return a short out-of-scope `needs_more_evidence` response instead.
 
 Never expose:
 
@@ -152,7 +157,7 @@ Use exactly one of these statuses:
 
 ## Current Local Readiness Snapshot
 
-As of 2026-05-17, the local project is ready for bounded Toolhouse integration.
+As of 2026-05-20, the local project is ready for bounded Toolhouse integration, but the hosted Toolhouse website configuration should be refreshed before relying on hosted worker output again.
 
 Current validated state:
 
@@ -163,10 +168,10 @@ Current validated state:
 - Deterministic backend tool functions exist for `explain_evidence`, `explain_query`, `describe_backend_schema`, `expand_query_context`, `expand_query_evidence`, `summarize_inventory`, `rank_properties`, `get_property_timeline`, `find_property_conflicts`, `search_properties`, `get_source_detail`, `aggregate_properties`, `search_source_chunks`, `nearby_properties`, and `audit_data`.
 - The CRE Backend MCP server is mounted into the FastAPI app at `/toolhouse/mcp` and protected by `CRE_TOOLHOUSE_MCP_BEARER_TOKEN`.
 - Current audit status: `ready_for_bounded_agent`.
-- Current sample audit summary: 23 source documents, 25 structured property records, 0 sources without chunks, 6 sources with text but no extracted property rows, 6 local Slack-shaped message rows without source URLs before live permalink overlay, 1 explainable Harbor Rd conflict group.
-- Current full-suite validation: `uv run pytest -q` passes 118 tests with no known failures or warning noise.
-- Current focused Toolhouse validation after completing the backend tool surface, Workers API client, coordinator tools, and output-contract validation: `uv run pytest tests/test_toolhouse_client.py tests/test_toolhouse_tools.py tests/test_toolhouse_mcp_server.py -q` passes 20 tests.
-- Current live Toolhouse smoke: `uv run cre-cli toolhouse-smoke` returned `answered` with no fallback, 4 allowed evidence IDs, 4 cited evidence IDs, and no schema errors.
+- Current live corpus restore summary: 35 source documents, 35 chunks, and 2431 structured property records.
+- Latest known full-suite validation: `uv run pytest -q` passes 138 tests with no known failures or warning noise.
+- Current focused Toolhouse validation after upload-surface hardening: `uv run pytest tests/test_toolhouse_tools.py tests/test_toolhouse_mcp_server.py -q` passes 17 tests.
+- Current live Toolhouse smoke after restoring the live corpus: `uv run cre-cli toolhouse-smoke "Show properties with cap rate over 5.5%."` returned a validated backend answer with 5 allowed evidence IDs and 3 cited evidence IDs, but the hosted Toolhouse worker returned `parse_error: empty_response`, so the backend used local fallback. After refreshing the website prompt and Agent Files, rerun the smoke and look for `toolhouse_fallback=false`.
 - Graphify stats after rebuild: 767 nodes, 1345 edges, 56 communities.
 
 Still deferred and not blockers for the first Toolhouse demo:
