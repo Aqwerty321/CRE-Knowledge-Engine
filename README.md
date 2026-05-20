@@ -1,10 +1,10 @@
 # CRE Knowledge Engine
 
-CRE Knowledge Engine is a Slack-native evidence system for commercial real estate teams. It turns the working material brokers already use - listing flyers, rent rolls, spreadsheets, tour notes, Slack corrections, and tenant requirements - into sourced answers without forcing the team into a new system.
+CRE Knowledge Engine is a Slack-native evidence layer for commercial real estate teams. It turns the material brokers already work from - listing flyers, rent rolls, spreadsheets, tour notes, Slack corrections, tenant briefs, and market notes - into sourced answers without asking the team to leave Slack or trust a black box.
 
-The workflow is straightforward: ask a broker-style question in Slack and get an answer that traces back to stored evidence. The app links each claim to the underlying row, page, message, or correction and keeps a replayable record of the route, evidence set, and answer. When a question needs broader analysis, Toolhouse can coordinate a second-pass review through backend MCP tools, but the backend still owns the facts, SQL templates, allowed evidence IDs, and citation validation.
+The system is built around a simple promise: every useful answer should trace back to evidence. A broker can ask about availability, rent, location, loading access, cap rates, conflicts, tenant fit, or broad inventory, and the app records the route, filters, evidence IDs, source rows/pages/messages, answer snapshot, and replay payload behind the Slack reply. Dense comparisons stay structured in the backend and arrive as CSV files in-thread instead of brittle markdown tables.
 
-The result is a Slack workflow that stays close to existing team habits while adding structured retrieval, thread-aware follow-ups, and a controlled escalation path.
+Toolhouse is used where it fits best: as a bounded second-pass reviewer over backend-selected evidence and MCP tools. The backend still owns the facts, SQL templates, allowed evidence IDs, citation validation, and Slack delivery, so agentic synthesis can add judgment without becoming the source of truth.
 
 ## Product Surface
 
