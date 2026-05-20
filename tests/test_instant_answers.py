@@ -97,6 +97,48 @@ def test_proximity_query_returns_ranked_cited_results(prepared_query_db: None, a
 
 
 @pytest.mark.golden
+def test_proximity_explain_query_surfaces_query_scoped_distance_details(
+    prepared_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    answer_payload = async_runner.run(answer_query("What properties do we have available near 123 Main Street?"))
+
+    explain_payload = async_runner.run(explain_query(answer_payload["query_id"]))
+
+    assert explain_payload["status"] == "explained"
+    assert explain_payload["decision_summary"]["anchor_address"] == "123 Main Street"
+    assert explain_payload["answer_snapshot"]["filters"]["query_evidence_details"]
+    assert all(item["distance_km"] is not None for item in explain_payload["evidence"])
+    assert all(item["anchor_address"] == "123 Main Street" for item in explain_payload["evidence"])
+    assert all("distance-ranked from 123 Main Street" in str(item["selection_reason"]) for item in explain_payload["evidence"])
+
+
+@pytest.mark.golden
+def test_proximity_query_can_prefilter_candidates_with_structured_constraints(
+    prepared_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = async_runner.run(answer_query("Near 123 Main Street, which industrial options have truck court or trailer parking?"))
+
+    assert payload["status"] == "answered"
+    assert payload["route_mode"] == "instant"
+    assert "structured_property_search" in payload["reason_codes"]
+    assert payload["matched_addresses"][0] == "18 Beacon Freight"
+    assert "120 Main St" not in payload["matched_addresses"]
+
+    explain_payload = async_runner.run(explain_query(payload["query_id"]))
+
+    assert explain_payload["answer_snapshot"]["filters"]["proximity_query_filters"]["property_types"] == ["industrial"]
+    evidence_property_types = [
+        item["property_record"]["property_type"]
+        for item in explain_payload["evidence"]
+        if item.get("property_record")
+    ]
+    assert evidence_property_types
+    assert set(evidence_property_types) == {"industrial"}
+
+
+@pytest.mark.golden
 def test_office_threshold_query_excludes_high_price_listing(
     prepared_query_db: None,
     async_runner: asyncio.Runner,
@@ -409,6 +451,53 @@ def test_generic_exact_lookup_returns_property_profile(
 
 
 @pytest.mark.golden
+def test_location_lookup_subject_avoids_yard_keyword_drift(
+    prepared_generated_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = async_runner.run(answer_query("what do u know about hudson yard"))
+
+    assert payload["status"] == "answered"
+    assert payload["route_mode"] == "instant"
+    assert "structured_property_search" in payload["reason_codes"]
+    assert "chunk_keyword_search" not in payload["reason_codes"]
+    assert "Hudson Yards" in payload["rendered_answer"]
+    assert "loading access or yard space" not in payload["rendered_answer"].lower()
+
+    explain_payload = async_runner.run(explain_query(payload["query_id"]))
+    conditions = explain_payload["decision_summary"]["query_constructor"]["conditions"]
+
+    assert any(
+        condition["field"] == "property_records.location_fields" and "hudson yards" in condition["value"]
+        for condition in conditions
+    )
+    assert all(condition["field"] != "property_records.infrastructure" for condition in conditions)
+
+
+@pytest.mark.golden
+def test_property_name_lookup_subject_prefers_aurora_campus_records(
+    prepared_generated_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = async_runner.run(answer_query("tell me about aurora campus"))
+
+    assert payload["status"] == "answered"
+    assert payload["route_mode"] == "instant"
+    assert "lookup_subject_property" in payload["reason_codes"]
+    assert "Aurora Campus" in payload["rendered_answer"]
+    assert payload["matched_addresses"] == ["7935 River Ln, Denver", "6606 River Ln, Denver"]
+    assert "8546 Orchard Row" not in payload["rendered_answer"]
+
+    explain_payload = async_runner.run(explain_query(payload["query_id"]))
+    conditions = explain_payload["decision_summary"]["query_constructor"]["conditions"]
+
+    assert any(
+        condition["field"] == "property_records.property_name_or_listing_id" and "aurora campus" in condition["value"]
+        for condition in conditions
+    )
+
+
+@pytest.mark.golden
 def test_no_results_answer_explains_filters_and_closest_matches(
     prepared_query_db: None,
     async_runner: asyncio.Runner,
@@ -459,6 +548,28 @@ def test_cap_rate_query_returns_generated_corpus_matches(
 
 
 @pytest.mark.golden
+def test_sea_facing_query_returns_generated_corpus_matches(
+    prepared_generated_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = async_runner.run(answer_query("what are some of the sea facing properties"))
+
+    assert payload["status"] == "answered"
+    assert payload["route_mode"] == "instant"
+    assert payload["evidence_count"] >= 1
+    assert payload["matched_addresses"]
+    assert "frontage" in payload["rendered_answer"].lower()
+
+    query_record, evidence_items, snapshot = async_runner.run(_load_query_artifacts(payload["query_id"]))
+
+    assert query_record.route_mode == "instant"
+    assert "facing_detected" in query_record.reason_codes
+    assert len(evidence_items) >= 1
+    assert snapshot is not None
+    assert set(snapshot.filters_json["facing"]) >= {"sea_facing", "waterfront"}
+
+
+@pytest.mark.golden
 def test_inventory_overview_summarizes_generated_corpus(
     prepared_generated_query_db: None,
     async_runner: asyncio.Runner,
@@ -482,6 +593,34 @@ def test_inventory_overview_summarizes_generated_corpus(
         "88 Foundry Ln",
     }
     assert any(address not in legacy_addresses for address in payload["matched_addresses"])
+
+
+@pytest.mark.golden
+def test_facing_summary_query_lists_available_facing_types(
+    prepared_query_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    payload = async_runner.run(answer_query("what are the kinds of facing that we have available"))
+
+    assert payload["status"] == "answered"
+    assert payload["route_mode"] == "instant"
+    assert payload["evidence_count"] == 4
+    assert "Facing summary" in payload["rendered_answer"]
+    assert "south" in payload["rendered_answer"].lower()
+    assert "west" in payload["rendered_answer"].lower()
+    assert "2 listing(s)" in payload["rendered_answer"]
+    assert payload["comparison_table"] is not None
+    assert payload["comparison_table"]["columns"] == ["Facing", "Count"]
+    assert payload["comparison_table"]["rows"] == [["west", "2"], ["east", "1"], ["south", "1"]]
+
+    query_record, evidence_items, snapshot = async_runner.run(_load_query_artifacts(payload["query_id"]))
+
+    assert query_record.route_mode == "instant"
+    assert "aggregation" in query_record.reason_codes
+    assert len(evidence_items) == 4
+    assert snapshot is not None
+    assert snapshot.filters_json["aggregate"] == "facet_counts"
+    assert snapshot.filters_json["aggregate_field"] == "facing"
 
 
 @pytest.mark.golden

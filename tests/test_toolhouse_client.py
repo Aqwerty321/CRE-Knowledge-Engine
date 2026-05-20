@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from app.toolhouse.client import build_toolhouse_message, is_acceptable_live_toolhouse_outcome, parse_toolhouse_response_payload
 
 
@@ -29,15 +31,27 @@ def test_build_toolhouse_message_preserves_query_package_shape() -> None:
         {
             "status": "ready",
             "query_id": "query-1",
+            "original_query": "Which options look strongest?",
+            "heuristic_result": "Local shortlist",
+            "route_mode": "hybrid",
+            "reason_codes": ["subjective_intent"],
             "allowed_evidence_ids": ["evidence-1"],
         }
     )
+    payload = json.loads(message)
 
     assert '"task": "look_deeper"' in message
     assert '"query_id": "query-1"' in message
+    assert payload["query_package_version"] == "toolhouse-query-package-v2"
+    assert payload["slack_visible_context"]["heuristic_result"] == "Local shortlist"
+    assert payload["agent_context"]["allowed_evidence_ids"] == ["evidence-1"]
     assert "Use CRE Backend MCP first" in message
+    assert "Treat slack_visible_context as the presentation surface only" in message
+    assert "search_properties accepts query_id" in message
     assert "If the initial evidence bundle is empty" in message
     assert "return needs_more_evidence or external_context_only" in message
+    assert "narrow the answer to the fully grounded subset" in message
+    assert "Use validation_risk only when unresolved support materially affects the returned answer" in message
     assert "Keep rendered_answer terse and aligned with the backend instant-answer style" in message
     assert "comparison_table object" in message
     assert "return suggested_followups as 0 to 5 short" in message

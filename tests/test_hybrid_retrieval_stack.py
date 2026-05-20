@@ -168,3 +168,11 @@ def test_router_prefers_structured_plan_for_live_qdrant_locations(monkeypatch) -
     assert plan.query_type == "generic_property_search"
     assert "lisbon" in plan.filters["locations"]
     assert plan.filters["requires_coordinates"] is True
+
+
+def test_router_prefers_structured_plan_for_sea_facing_queries() -> None:
+    plan = build_query_plan("waterfront properties")
+
+    assert plan.route_mode == "instant"
+    assert plan.query_type == "generic_property_search"
+    assert "waterfront" in plan.filters["facing"]

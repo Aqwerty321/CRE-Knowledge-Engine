@@ -45,6 +45,8 @@ FOLLOW_UP_MODAL_REFRESH_BLOCK_ID = "follow_up_refresh_block"
 FOLLOW_UP_MODAL_REFRESH_ACTION_ID = "refresh_follow_up_suggestions"
 FOLLOW_UP_MODAL_CUSTOM_VALUE = "custom"
 FOLLOW_UP_MODAL_MODES = ("instant", "auto", "agent")
+SLACK_MESSAGE_TEXT_LIMIT = 4000
+SLACK_SAFE_MESSAGE_TEXT_LIMIT = 3900
 SLACK_SECTION_TEXT_LIMIT = 3000
 SLACK_SAFE_SECTION_TEXT_LIMIT = 2900
 
@@ -141,6 +143,16 @@ def _normalize_slack_mrkdwn(text: str) -> str:
     normalized = re.sub(r"(^|\n)[•·]\s+", r"\1- ", normalized)
     normalized = re.sub(r"\n{3,}", "\n\n", normalized)
     return normalized
+
+
+def _truncate_slack_message_text(text: str, *, limit: int = SLACK_SAFE_MESSAGE_TEXT_LIMIT) -> str:
+    normalized = _normalize_slack_mrkdwn(text)
+    if len(normalized) <= limit:
+        return normalized
+
+    suffix = "\n\n_See full answer in the threaded blocks._"
+    available = max(1, limit - len(suffix) - 1)
+    return normalized[:available].rstrip() + "…" + suffix
 
 
 def _short_reason_for_payload(payload: dict[str, Any]) -> str:
@@ -605,7 +617,8 @@ def build_slack_reply_text(payload: dict[str, Any]) -> str:
             detail = "structured backend retrieval"
         mode_label = f"_Mode: Instant answer - {detail}_"
 
-    return mode_label if not rendered_answer else f"{mode_label}\n\n{rendered_answer}"
+    message_text = mode_label if not rendered_answer else f"{mode_label}\n\n{rendered_answer}"
+    return _truncate_slack_message_text(message_text)
 
 
 def build_answer_blocks(answer_payload: dict[str, Any]) -> list[dict[str, Any]]:

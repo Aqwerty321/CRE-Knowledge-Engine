@@ -58,6 +58,8 @@ def test_expanded_exact_lookup_reads_beacon_profile(
     assert payload["matched_addresses"] == ["18 Beacon Freight"]
     assert payload["evidence_count"] >= 3
     assert "36,000 SF" in payload["rendered_answer"]
+    assert "120 ft truck court" in payload["rendered_answer"]
+    assert "trailer parking" in payload["rendered_answer"]
     assert "last-mile-industrial-watchlist.csv" in payload["rendered_answer"]
 
     explain_payload = async_runner.run(explain_query(payload["query_id"]))
@@ -65,6 +67,10 @@ def test_expanded_exact_lookup_reads_beacon_profile(
 
     assert explain_payload["decision_summary"]["query_constructor"]["sort"] is None
     assert any(item["source_document"]["file_name"] == "client-tour-notes.txt" for item in explain_payload["evidence"])
+    first_record = explain_payload["evidence"][0]["property_record"]
+    assert first_record["dock_doors"] == 2
+    assert first_record["truck_court_depth_ft"] == 120
+    assert "trailer parking" in str(first_record["loading_access"])
     assert replay_payload["status"] == "replayed"
     assert replay_payload["replay_checks"]["snapshot_evidence_ids_match_explain_order"] is True
 

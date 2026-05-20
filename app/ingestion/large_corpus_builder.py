@@ -95,6 +95,31 @@ STATUS_SEQUENCE = (
 )
 
 FACING_SEQUENCE = ("north", "south", "east", "west", "corner", "dual_aspect", "courtyard", "street_front")
+COASTAL_FACING_SEQUENCE = ("waterfront", "sea_facing", "waterfront", "harbor_view", "waterfront", "bay_front")
+COASTAL_FACING_NEIGHBORHOODS = {
+    "Brickell",
+    "Seaport",
+    "South Bay",
+    "Mission Bay",
+    "South Lake Union",
+    "Pioneer Square",
+    "Canary Wharf",
+    "Docklands",
+    "HafenCity",
+    "Rotterdam Port",
+    "22@",
+    "Nordhavn",
+    "Financial District",
+    "CBD",
+    "Changi",
+    "Tuas",
+}
+COASTAL_FACING_NOTES = {
+    "waterfront": "Waterfront-oriented frontage is part of this deterministic coastal demo profile.",
+    "sea_facing": "Sea-facing frontage is part of this deterministic coastal demo profile.",
+    "harbor_view": "Harbor-view frontage is part of this deterministic coastal demo profile.",
+    "bay_front": "Bay-front exposure is part of this deterministic coastal demo profile.",
+}
 FURNISHING_SEQUENCE = ("unfurnished", "warm_shell", "shell", "partially_furnished", "furnished", "turnkey")
 STREET_NAMES = ("Market", "Harbor", "Canal", "Foundry", "Union", "Beacon", "Spruce", "River", "Orchard", "Gallery", "Skyline", "Logistics")
 STREET_SUFFIXES = ("St", "Ave", "Rd", "Ln", "Pkwy", "Way", "Loop", "Row")
@@ -237,6 +262,21 @@ def _availability_for_status(status: str, index: int) -> tuple[str, str]:
     return status.replace("_", " ").title(), "2026-05-19"
 
 
+def _select_facing(index: int, market: MarketSeed, neighborhood: str) -> str:
+    default_facing = FACING_SEQUENCE[index % len(FACING_SEQUENCE)]
+    if market.port_distance_miles > 8:
+        return default_facing
+    if neighborhood in COASTAL_FACING_NEIGHBORHOODS:
+        return COASTAL_FACING_SEQUENCE[index % len(COASTAL_FACING_SEQUENCE)]
+    if market.port_distance_miles <= 4 and index % 8 == 0:
+        return COASTAL_FACING_SEQUENCE[index % len(COASTAL_FACING_SEQUENCE)]
+    return default_facing
+
+
+def _coastal_facing_note(facing: str) -> str | None:
+    return COASTAL_FACING_NOTES.get(facing)
+
+
 def _synthetic_cap_rate(property_type: str, status: str, index: int, rng: random.Random) -> Decimal | None:
     if status in {"sold", "withdrawn", "pipeline"}:
         return None
@@ -278,6 +318,8 @@ def _row_payload(index: int, market: MarketSeed, rng: random.Random) -> dict[str
     lat = market.lat + rng.uniform(-0.09, 0.09)
     lng = market.lng + rng.uniform(-0.09, 0.09)
     availability, availability_date = _availability_for_status(status, index)
+    facing = _select_facing(index, market, neighborhood)
+    coastal_facing_note = _coastal_facing_note(facing)
     listing_id = f"LC-{market.country_code}-{index + 1:04d}"
     rent_currency = "USD" if market.country_code in {"US", "CA"} else ("GBP" if market.country_code == "GB" else "EUR")
     sq_ft = profile.get("sq_ft")
@@ -292,6 +334,8 @@ def _row_payload(index: int, market: MarketSeed, rng: random.Random) -> dict[str
         "Deterministic demo enrichment: public geospatial-style address/locality backbone, synthetic CRE commercial profile, "
         f"review focus on {profile['usage_type']} use in {submarket}."
     )
+    if coastal_facing_note:
+        additional_information = f"{additional_information} {coastal_facing_note}"
     infrastructure_json = {
         "nearest_highway": market.highways[index % len(market.highways)],
         "airport_distance_miles": round(market.airport_distance_miles + rng.uniform(-2.0, 4.0), 2),
@@ -301,10 +345,12 @@ def _row_payload(index: int, market: MarketSeed, rng: random.Random) -> dict[str
         "sprinklered": property_type in {"industrial", "cold_storage", "data_center", "self_storage"},
     }
     amenities_json = {
-        "facing": FACING_SEQUENCE[index % len(FACING_SEQUENCE)],
+        "facing": facing,
         "furnishing_status": FURNISHING_SEQUENCE[index % len(FURNISHING_SEQUENCE)],
         "transit_score": 35 + (index % 60),
     }
+    if coastal_facing_note:
+        amenities_json["waterfront_context"] = coastal_facing_note
     financials_json = {
         "transaction_mode": transaction_mode,
         "currency": rent_currency,
@@ -409,7 +455,16 @@ def _row_payload(index: int, market: MarketSeed, rng: random.Random) -> dict[str
         "amenities_json": amenities_json,
         "infrastructure_json": infrastructure_json,
         "financials_json": financials_json,
-        "tags_json": {"tags": [property_type, profile["usage_type"], status, neighborhood]},
+        "tags_json": {
+            "tags": [
+                property_type,
+                profile["usage_type"],
+                status,
+                neighborhood,
+                facing,
+                *(["coastal_context"] if coastal_facing_note else []),
+            ]
+        },
         "source_metadata_json": source_metadata_json,
         "source_page": None,
         "source_row": None,

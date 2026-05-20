@@ -165,8 +165,8 @@ This is the trust invariant that keeps smart mode from undermining the determini
 The first Toolhouse-facing tools should be small and deterministic:
 
 - `explain_evidence(query_id)`;
-- `search_properties(filters)`;
-- `search_source_chunks(query, filters)`;
+- `search_properties(filters, query_id)`;
+- `search_source_chunks(query, filters, query_id)`;
 - `get_source_detail(source_id)`.
 
 Do not start with the whole planned six-tool surface. Start with the tools needed for one `Look deeper` path.

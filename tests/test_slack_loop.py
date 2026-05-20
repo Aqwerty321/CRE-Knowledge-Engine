@@ -732,6 +732,25 @@ def test_build_slack_reply_text_normalizes_agent_markdown() -> None:
     assert "- *240 Harbor Rd* at *$18.00/SF*" in formatted
 
 
+def test_build_slack_reply_text_truncates_long_inventory_fallback_text() -> None:
+    long_answer = "\n".join(
+        f"- *Property {index}* - sourced inventory detail with market, pricing, availability, and notes."
+        for index in range(200)
+    )
+
+    formatted = build_slack_reply_text(
+        {
+            "answer_mode": "instant_answer",
+            "route_mode": "instant",
+            "rendered_answer": long_answer,
+        }
+    )
+
+    assert formatted.startswith("_Mode: Instant answer - structured backend retrieval_")
+    assert len(formatted) <= 3900
+    assert "See full answer in the threaded blocks." in formatted
+
+
 def test_build_answer_blocks_adds_compact_trust_receipt_and_table() -> None:
     blocks = build_answer_blocks(
         {

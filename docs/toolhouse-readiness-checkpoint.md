@@ -93,6 +93,7 @@ The `Look deeper` action:
 - immediately posts `On it. Checking the messy bits.` as an ephemeral acknowledgement;
 - queues a `look_deeper` job;
 - packages the stored query, allowed evidence bundle, and `evidence_context` manifest;
+- now includes an explicit `slack_visible_context` surface alongside richer hidden `agent_context` fields so Toolhouse can reason from full backend context without being limited to the Slack-visible phrasing;
 - runs a local evidence-bound deeper review;
 - validates cited evidence IDs before posting;
 - posts the result in the original thread.
@@ -112,15 +113,15 @@ Toolhouse receives enough context to reason over the first bundle, and it can ca
 - `rank_properties_tool(filters, objective, keywords, query_id)`;
 - `get_property_timeline_tool(property_ref, query_id)`;
 - `find_property_conflicts_tool(filters, query_id, limit)`;
-- `search_properties_tool(filters)`;
+- `search_properties_tool(filters, query_id)`;
 - `get_source_detail_tool(source_id)`;
 - `aggregate_properties_tool(filters, group_by, metrics)`;
-- `search_source_chunks_tool(query, filters)`;
+- `search_source_chunks_tool(query, filters, query_id)`;
 - `nearby_properties_tool(origin, radius_miles, filters)`;
 - `audit_data_tool()`;
 - `local_deeper_review_tool(query_id)`.
 
-These tools return structured payloads with evidence IDs from query explanation, source metadata, query-constructor details, chunks, property records, inventory summaries, rankings, timelines, conflict groups, aggregations, keyword chunk results, proximity rankings, and data-quality state. `expand_query_evidence_tool` and the query-aware coordinator tools are the controlled exceptions to read-only behavior: they can append backend-selected evidence IDs to the current query so Toolhouse can cite newly discovered backend results without receiving raw database access.
+These tools return structured payloads with evidence IDs from query explanation, source metadata, query-constructor details, chunks, property records, inventory summaries, rankings, timelines, conflict groups, aggregations, keyword chunk results, proximity rankings, and data-quality state. `expand_query_evidence_tool`, `search_properties_tool(..., query_id=...)`, `search_source_chunks_tool(..., query_id=...)`, and the query-aware coordinator tools are the controlled exceptions to read-only behavior: they can append backend-selected evidence IDs to the current query so Toolhouse can cite newly discovered backend results without receiving raw database access.
 
 ### Authenticated MCP Endpoint
 

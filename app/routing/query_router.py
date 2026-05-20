@@ -93,22 +93,62 @@ def _prefer_structured_plan(structured_spec: object | None) -> bool:
     )
 
 
+def _prefer_proximity_prefilter(structured_spec: object | None) -> bool:
+    if structured_spec is None:
+        return False
+
+    return any(
+        [
+            bool(getattr(structured_spec, "property_types", [])),
+            bool(getattr(structured_spec, "markets", [])),
+            bool(getattr(structured_spec, "locations", [])),
+            bool(getattr(structured_spec, "usage_types", [])),
+            bool(getattr(structured_spec, "facing", [])),
+            bool(getattr(structured_spec, "furnishing_statuses", [])),
+            bool(getattr(structured_spec, "infrastructure_terms", [])),
+            bool(getattr(structured_spec, "keywords", [])),
+            getattr(structured_spec, "price_per_sq_ft_lt", None) is not None,
+            getattr(structured_spec, "price_per_sq_ft_gt", None) is not None,
+            getattr(structured_spec, "sale_price_lt", None) is not None,
+            getattr(structured_spec, "sale_price_gt", None) is not None,
+            getattr(structured_spec, "cap_rate_gte", None) is not None,
+            getattr(structured_spec, "cap_rate_lte", None) is not None,
+            getattr(structured_spec, "sq_ft_gte", None) is not None,
+            getattr(structured_spec, "sq_ft_lte", None) is not None,
+            getattr(structured_spec, "clear_height_ft_gte", None) is not None,
+            getattr(structured_spec, "dock_doors_gte", None) is not None,
+            getattr(structured_spec, "trailer_parking_spaces_gte", None) is not None,
+            getattr(structured_spec, "parking_spaces_gte", None) is not None,
+            bool(getattr(structured_spec, "requires_coordinates", False)),
+        ]
+    )
+
+
 def build_query_plan(query_text: str) -> QueryPlan:
     normalized = _normalize_text(query_text)
+    structured_spec = build_structured_query_spec(query_text)
 
     for anchor_text, coordinates in DEMO_ANCHORS.items():
         if "near" in normalized and anchor_text in normalized:
+            filters: dict[str, object] = {
+                "anchor_address": "123 Main Street",
+                "anchor_lat": coordinates[0],
+                "anchor_lng": coordinates[1],
+                "limit": 3,
+            }
+            reason_codes = ["instant", "proximity", "anchor_address"]
+            if structured_spec is not None and _prefer_proximity_prefilter(structured_spec):
+                proximity_query_filters = structured_spec.to_filters()
+                proximity_query_filters.pop("address_terms", None)
+                filters["proximity_query_filters"] = proximity_query_filters
+                filters["candidate_limit"] = max(50, int(proximity_query_filters.get("limit") or 5) * 20)
+                reason_codes.extend(code for code in structured_spec.reason_codes if code not in reason_codes)
             return QueryPlan(
                 route_mode="instant",
                 query_type="proximity",
                 route_confidence=Decimal("0.9900"),
-                reason_codes=["instant", "proximity", "anchor_address"],
-                filters={
-                    "anchor_address": "123 Main Street",
-                    "anchor_lat": coordinates[0],
-                    "anchor_lng": coordinates[1],
-                    "limit": 3,
-                },
+                reason_codes=reason_codes,
+                filters=filters,
             )
 
     threshold = _extract_currency_threshold(normalized)
@@ -186,7 +226,6 @@ def build_query_plan(query_text: str) -> QueryPlan:
             },
         )
 
-    structured_spec = build_structured_query_spec(query_text)
     if structured_spec is not None and structured_spec.intent == "tenant_fit":
         return QueryPlan(
             route_mode=structured_spec.route_mode,

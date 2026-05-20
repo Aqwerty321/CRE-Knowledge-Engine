@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -143,12 +144,50 @@ DEFAULT_RICH_FIELD_VALUES = [
     "submarket",
     "postal_code",
     "map_url",
+    "clear_height_ft",
+    "dock_doors",
+    "drive_in_doors",
+    "truck_court_depth_ft",
+    "trailer_parking_spaces",
+    "parking_spaces",
     "facing",
     "furnishing_status",
     "loading_access",
+    "yard_area_sq_ft",
     "nearest_highway",
     "additional_information",
 ]
+
+NUMBER_WORDS = {
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+}
+
+COUNT_TOKEN = r"(?P<count>\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
+DOCK_DOORS_RE = re.compile(rf"\b{COUNT_TOKEN}\s+(?:dock\s+doors?|loading\s+docks?)\b", re.IGNORECASE)
+DRIVE_IN_DOORS_RE = re.compile(rf"\b{COUNT_TOKEN}\s+(?:drive-?in|grade-?level)\s+doors?\b", re.IGNORECASE)
+TRAILER_PARKING_SPACES_RE = re.compile(rf"\b{COUNT_TOKEN}\s+trailer\s+parking\s+spaces?\b", re.IGNORECASE)
+PARKING_SPACES_RE = re.compile(rf"\b{COUNT_TOKEN}\s+parking\s+spaces?\b", re.IGNORECASE)
+TRUCK_COURT_DEPTH_RE = re.compile(r"\b(?P<count>\d{2,4})\s*(?:ft|foot|feet)\s+truck\s+court\b", re.IGNORECASE)
+YARD_AREA_RE = re.compile(
+    r"\b(?P<count>\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\s*(?P<suffix>k)?\s*(?:sf|sq\.?\s*ft|square\s+feet)\s+(?:yard|yard\s+area)\b",
+    re.IGNORECASE,
+)
+CLEAR_HEIGHT_RE = re.compile(
+    r"\b(?:clear|ceiling)\s+height(?:\s+is|\s+of|\s+at)?\s+(?P<count>\d+(?:\.\d+)?)\s*(?:ft|foot|feet)\b",
+    re.IGNORECASE,
+)
+CLEAR_SUFFIX_RE = re.compile(r"\b(?P<count>\d+(?:\.\d+)?)\s*(?:ft|foot|feet)\s+clear\b", re.IGNORECASE)
 
 
 class SampleFieldValueModel(BaseModel):
@@ -478,6 +517,170 @@ def _extracted_property_models(source: SampleSourceModel, chunk_models: list[Sam
             chunk_index=fact.chunk_index,
         )
         for fact in extracted
+    ]
+
+
+def _count_from_match(match: re.Match[str] | None) -> int | None:
+    if match is None:
+        return None
+    raw_count = str(match.group("count") or "").strip().lower()
+    if not raw_count:
+        return None
+    if raw_count.isdigit():
+        return int(raw_count)
+    return NUMBER_WORDS.get(raw_count)
+
+
+def _sq_ft_from_match(match: re.Match[str] | None) -> int | None:
+    if match is None:
+        return None
+    raw_value = str(match.group("count") or "").replace(",", "")
+    if not raw_value:
+        return None
+    value = float(raw_value)
+    if match.groupdict().get("suffix"):
+        value *= 1000
+    return int(value)
+
+
+def _property_text_excerpt(chunk_text: str, address: str) -> str:
+    normalized_chunk = chunk_text.strip()
+    if not normalized_chunk:
+        return ""
+
+    address_lower = address.lower()
+    line_matches = [line.strip() for line in normalized_chunk.splitlines() if address_lower in line.lower()]
+    if line_matches:
+        return " ".join(line_matches)
+
+    paragraph_matches = [
+        paragraph.strip()
+        for paragraph in re.split(r"\n\s*\n", normalized_chunk)
+        if address_lower in paragraph.lower()
+    ]
+    if paragraph_matches:
+        return " ".join(paragraph_matches)
+
+    sentence_matches = [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[.!?])\s+", normalized_chunk)
+        if address_lower in sentence.lower()
+    ]
+    if sentence_matches:
+        return " ".join(sentence_matches)
+
+    return normalized_chunk
+
+
+def _loading_access_summary(text: str) -> str | None:
+    lowered = text.lower()
+    details: list[str] = []
+
+    dock_match = DOCK_DOORS_RE.search(text)
+    if dock_match is not None:
+        count = _count_from_match(dock_match)
+        if count is not None:
+            details.append(f"{count} dock door(s)")
+
+    drive_in_match = DRIVE_IN_DOORS_RE.search(text)
+    if drive_in_match is not None:
+        count = _count_from_match(drive_in_match)
+        if count is not None:
+            details.append(f"{count} drive-in door(s)")
+
+    truck_court_match = TRUCK_COURT_DEPTH_RE.search(text)
+    if truck_court_match is not None:
+        details.append(f"{int(truck_court_match.group('count'))} ft truck court")
+    elif "truck court" in lowered:
+        details.append("truck court")
+
+    trailer_parking_match = TRAILER_PARKING_SPACES_RE.search(text)
+    if trailer_parking_match is not None:
+        count = _count_from_match(trailer_parking_match)
+        if count is not None:
+            details.append(f"{count} trailer parking space(s)")
+    elif "trailer parking" in lowered or "trailer staging" in lowered:
+        details.append("trailer parking")
+
+    if "shared yard" in lowered:
+        details.append("shared yard")
+    elif "yard access" in lowered:
+        details.append("yard access")
+    elif "yard" in lowered:
+        details.append("yard")
+
+    if not details:
+        return None
+    return ", ".join(dict.fromkeys(details))
+
+
+def _enrich_property_model_from_chunk(property_model: SamplePropertyModel, chunk_text: str) -> SamplePropertyModel:
+    property_text = _property_text_excerpt(chunk_text, property_model.address)
+    if not property_text:
+        return property_model
+
+    updates: dict[str, object] = {}
+
+    if property_model.dock_doors is None:
+        dock_doors = _count_from_match(DOCK_DOORS_RE.search(property_text))
+        if dock_doors is not None:
+            updates["dock_doors"] = dock_doors
+
+    if property_model.drive_in_doors is None:
+        drive_in_doors = _count_from_match(DRIVE_IN_DOORS_RE.search(property_text))
+        if drive_in_doors is not None:
+            updates["drive_in_doors"] = drive_in_doors
+
+    if property_model.trailer_parking_spaces is None:
+        trailer_parking_spaces = _count_from_match(TRAILER_PARKING_SPACES_RE.search(property_text))
+        if trailer_parking_spaces is not None:
+            updates["trailer_parking_spaces"] = trailer_parking_spaces
+
+    if property_model.parking_spaces is None:
+        parking_spaces_match = PARKING_SPACES_RE.search(property_text)
+        parking_spaces = _count_from_match(parking_spaces_match)
+        if parking_spaces is not None and "trailer parking" not in parking_spaces_match.group(0).lower():
+            updates["parking_spaces"] = parking_spaces
+
+    if property_model.truck_court_depth_ft is None:
+        truck_court_match = TRUCK_COURT_DEPTH_RE.search(property_text)
+        if truck_court_match is not None:
+            updates["truck_court_depth_ft"] = int(truck_court_match.group("count"))
+
+    if property_model.yard_area_sq_ft is None:
+        yard_area_sq_ft = _sq_ft_from_match(YARD_AREA_RE.search(property_text))
+        if yard_area_sq_ft is not None:
+            updates["yard_area_sq_ft"] = yard_area_sq_ft
+
+    if property_model.clear_height_ft is None:
+        clear_height_match = CLEAR_HEIGHT_RE.search(property_text) or CLEAR_SUFFIX_RE.search(property_text)
+        if clear_height_match is not None:
+            updates["clear_height_ft"] = Decimal(clear_height_match.group("count"))
+
+    if not property_model.loading_access:
+        loading_access = _loading_access_summary(property_text)
+        if loading_access:
+            updates["loading_access"] = loading_access
+
+    if not property_model.additional_information:
+        property_text_clean = " ".join(property_text.split())
+        if property_text_clean and property_text_clean.lower() != property_model.address.lower():
+            updates["additional_information"] = property_text_clean
+
+    return property_model if not updates else property_model.model_copy(update=updates)
+
+
+def _enrich_property_models(property_models: list[SamplePropertyModel], chunk_models: list[SampleChunkModel]) -> list[SamplePropertyModel]:
+    chunk_text_by_index = {
+        chunk.chunk_index if chunk.chunk_index is not None else index: chunk.text or ""
+        for index, chunk in enumerate(chunk_models)
+    }
+    return [
+        _enrich_property_model_from_chunk(
+            property_model,
+            chunk_text_by_index.get(property_model.chunk_index if property_model.chunk_index is not None else 0, ""),
+        )
+        for property_model in property_models
     ]
 
 
@@ -914,7 +1117,10 @@ async def import_sample_dataset(dataset: SampleDatasetModel, sample_data_dir: Pa
                 await _clear_existing_children(session, source_record.id)
 
                 chunk_models = _build_chunks(source, raw_text, parsed_chunks)
-                property_models = source.properties or _extracted_property_models(source, chunk_models)
+                property_models = _enrich_property_models(
+                    source.properties or _extracted_property_models(source, chunk_models),
+                    chunk_models,
+                )
                 chunk_records: dict[int, Chunk] = {}
                 for chunk_model in chunk_models:
                     chunk_record = Chunk(

@@ -170,6 +170,33 @@ FACING_ALIASES: dict[str, tuple[str, ...]] = {
     "west": ("west facing", "west-facing", "facing west"),
     "corner": ("corner", "corner frontage"),
     "dual_aspect": ("dual aspect", "dual-aspect", "two sides"),
+    "sea_facing": ("sea facing", "sea-facing", "facing the sea", "sea view", "seaview", "ocean facing", "ocean-facing"),
+    "waterfront": (
+        "waterfront",
+        "water front",
+        "water-facing",
+        "water facing",
+        "coastal",
+        "coast facing",
+        "coast-facing",
+        "beachfront",
+        "beach front",
+        "sea facing",
+        "sea-facing",
+    ),
+    "harbor_view": (
+        "harbor view",
+        "harbour view",
+        "harbor-facing",
+        "harbour-facing",
+        "harbor facing",
+        "harbour facing",
+        "marina-facing",
+        "marina facing",
+        "port-facing",
+        "port facing",
+    ),
+    "bay_front": ("bay front", "bay-front", "bay facing", "bay-facing", "waterside"),
 }
 
 USAGE_ALIASES: dict[str, tuple[str, ...]] = {
@@ -232,6 +259,21 @@ INVENTORY_PHRASES = {
     "what's available",
 }
 
+LOOKUP_SUBJECT_PATTERNS = (
+    re.compile(r"\bknow about\s+(?P<subject>.+)$"),
+    re.compile(r"\btell me about\s+(?P<subject>.+)$"),
+    re.compile(r"\bdetails?\s+(?:on|about)\s+(?P<subject>.+)$"),
+)
+
+LOOKUP_OVERRIDE_REASON_CODES = {
+    "facing_detected",
+    "furnishing_detected",
+    "infrastructure_terms",
+    "keyword_terms",
+    "property_type_detected",
+    "usage_detected",
+}
+
 
 @dataclass(frozen=True)
 class StructuredQuerySpec:
@@ -239,6 +281,8 @@ class StructuredQuerySpec:
     route_mode: str
     route_confidence: Decimal
     reason_codes: list[str]
+    lookup_subject: str | None = None
+    lookup_terms: list[str] = field(default_factory=list)
     property_types: list[str] = field(default_factory=list)
     address_terms: list[str] = field(default_factory=list)
     uploader_names: list[str] = field(default_factory=list)
@@ -275,6 +319,8 @@ class StructuredQuerySpec:
     def to_filters(self) -> dict[str, object]:
         return {
             "intent": self.intent,
+            "lookup_subject": self.lookup_subject,
+            "lookup_terms": self.lookup_terms,
             "property_types": self.property_types,
             "address_terms": self.address_terms,
             "uploader_names": self.uploader_names,
@@ -321,6 +367,22 @@ def _has_phrase(normalized: str, phrases: set[str]) -> bool:
 def _contains_alias(normalized: str, alias: str) -> bool:
     escaped = re.escape(alias.lower().strip())
     return re.search(rf"(?<![a-z0-9]){escaped}(?![a-z0-9])", normalized) is not None
+
+
+def _contains_property_type_alias(normalized: str, property_type: str, alias: str) -> bool:
+    if property_type != "parking" or alias != "parking":
+        return _contains_alias(normalized, alias)
+
+    if any(
+        _contains_alias(normalized, asset_alias)
+        for asset_alias in ("garage", "surface lot", "car park", "parking lot", "parking facility", "parking deck")
+    ):
+        return True
+
+    if re.search(r"\btrailer parking\b|\bparking spaces?\b|\bcar spaces?\b|\btrailer spaces?\b|\btrailer stalls?\b", normalized):
+        return False
+
+    return _contains_alias(normalized, alias)
 
 
 def _normalize_location_value(value: str) -> str:
@@ -567,6 +629,10 @@ def _asks_for_inventory(normalized: str) -> bool:
     return _asks_for_listing(normalized) or any(term in normalized for term in ("all", "any", "available", "have"))
 
 
+def _mentions_inventory_noun(normalized: str) -> bool:
+    return any(_contains_alias(normalized, noun) for noun in INVENTORY_NOUNS)
+
+
 def _inventory_limit(normalized: str, requested_limit: int) -> int:
     if any(term in normalized for term in ("all", "inventory", "database", "what do we have")):
         return max(requested_limit, 25)
@@ -746,7 +812,7 @@ def _extract_property_types(normalized: str) -> tuple[list[str], list[str]]:
     matches: list[str] = []
     reason_codes: list[str] = []
     for property_type, aliases in PROPERTY_TYPE_ALIASES.items():
-        if any(_contains_alias(normalized, alias) for alias in aliases):
+        if any(_contains_property_type_alias(normalized, property_type, alias) for alias in aliases):
             matches.append(property_type)
             reason_codes.append("property_type_detected")
     return sorted(set(matches)), sorted(set(reason_codes))
@@ -774,6 +840,60 @@ def _extract_locations(normalized: str) -> tuple[list[str], list[str]]:
             matches.extend(bundle)
     reason_codes = ["location_detected"] if matches else []
     return sorted(set(matches)), reason_codes
+
+
+def _extract_lookup_subject(normalized: str) -> str | None:
+    for pattern in LOOKUP_SUBJECT_PATTERNS:
+        match = pattern.search(normalized)
+        if not match:
+            continue
+        subject = re.sub(r"^(?:the|this|that)\s+", "", str(match.group("subject") or "").strip())
+        subject = re.sub(r"\b(?:please|pls)\b$", "", subject).strip()
+        if subject and subject not in {"it", "them", "this", "that"}:
+            return subject
+    return None
+
+
+def _lookup_subject_variants(subject: str) -> list[str]:
+    normalized_subject = _normalize_text(subject)
+    if not normalized_subject:
+        return []
+
+    variants = {normalized_subject}
+    if normalized_subject.endswith("s"):
+        if not normalized_subject.endswith(("ss", "us")):
+            singular = normalized_subject[:-1].strip()
+            if singular:
+                variants.add(singular)
+    else:
+        variants.add(f"{normalized_subject}s")
+    return sorted(variants)
+
+
+def _resolve_lookup_subject(subject: str) -> tuple[list[str], list[str]]:
+    variants = _lookup_subject_variants(subject)
+    if not variants:
+        return [], []
+
+    address_terms = sorted(
+        {
+            normalized_address
+            for alias, normalized_address in KNOWN_ADDRESS_ALIASES.items()
+            if any(_contains_alias(variant, alias) for variant in variants)
+        }
+    )
+
+    if address_terms:
+        return address_terms, []
+
+    locations = sorted(
+        {
+            location
+            for location, aliases in _build_known_location_aliases().items()
+            if any(_contains_alias(variant, alias) for variant in variants for alias in aliases)
+        }
+    )
+    return address_terms, locations
 
 
 def _extract_alias_values(normalized: str, aliases_by_value: dict[str, tuple[str, ...]], reason_code: str) -> tuple[list[str], list[str]]:
@@ -853,7 +973,21 @@ def _extract_missing_fields(normalized: str) -> list[str]:
     return matches or ["sq_ft", "price_per_sq_ft", "availability", "market", "geo", "source_url"]
 
 
+def _extract_facet_aggregation(normalized: str) -> tuple[str | None, str | None, list[str]]:
+    if not any(phrase in normalized for phrase in ("kind of", "kinds of", "type of", "types of")):
+        return None, None, []
+
+    if any(_contains_alias(normalized, alias) for alias in ("facing", "facings", "frontage", "frontages", "orientation", "orientations")):
+        return "facet_counts", "facing", ["aggregation", "facet_field"]
+
+    return None, None, []
+
+
 def _extract_aggregation(normalized: str) -> tuple[str | None, str | None, list[str]]:
+    facet_aggregate, facet_field, facet_codes = _extract_facet_aggregation(normalized)
+    if facet_aggregate is not None:
+        return facet_aggregate, facet_field, facet_codes
+
     if "how many" in normalized or "count" in normalized:
         return "count", "property_records", ["aggregation"]
     if "average" in normalized or "avg" in normalized:
@@ -871,6 +1005,8 @@ def build_structured_query_spec(query_text: str) -> StructuredQuerySpec | None:
         return None
 
     reason_codes: list[str] = ["heuristic_router"]
+    lookup_subject = _extract_lookup_subject(normalized)
+    lookup_terms = [] if lookup_subject is None else _lookup_subject_variants(lookup_subject)
     property_types, codes = _extract_property_types(normalized)
     reason_codes.extend(codes)
     address_terms, codes = _extract_address_terms(normalized)
@@ -881,6 +1017,18 @@ def build_structured_query_spec(query_text: str) -> StructuredQuerySpec | None:
     reason_codes.extend(codes)
     locations, codes = _extract_locations(normalized)
     reason_codes.extend(codes)
+    if lookup_subject:
+        recovered_address_terms, recovered_locations = _resolve_lookup_subject(lookup_subject)
+        if recovered_address_terms and not address_terms:
+            address_terms = recovered_address_terms
+            reason_codes.append("address_detected")
+        if recovered_locations:
+            previous_locations = set(locations)
+            locations = sorted(set([*locations, *recovered_locations]))
+            if set(locations) != previous_locations:
+                reason_codes.append("location_detected")
+        if recovered_address_terms or recovered_locations:
+            reason_codes.append("lookup_subject_detected")
     statuses, codes = _extract_alias_values(normalized, STATUS_ALIASES, "status_detected")
     reason_codes.extend(codes)
     usage_types, codes = _extract_alias_values(normalized, USAGE_ALIASES, "usage_detected")
@@ -1047,7 +1195,8 @@ def build_structured_query_spec(query_text: str) -> StructuredQuerySpec | None:
 
     asks_for_inventory = _asks_for_inventory(normalized)
     has_structured_signal = bool(
-        property_types
+        lookup_terms
+        or property_types
         or address_terms
         or uploader_names
         or markets
@@ -1075,13 +1224,27 @@ def build_structured_query_spec(query_text: str) -> StructuredQuerySpec | None:
         or sort is not None
     )
     asks_for_listing = _asks_for_listing(normalized)
+    mentions_inventory_noun = _mentions_inventory_noun(normalized)
 
-    if address_terms and any(term in normalized for term in ("know about", "details", "detail", "tell me about")):
+    if lookup_subject and address_terms:
         intent = "exact_lookup"
         confidence = Decimal("0.9400")
+        reason_codes = [code for code in reason_codes if code not in LOOKUP_OVERRIDE_REASON_CODES]
         reason_codes.append("exact_lookup")
+        lookup_terms = []
         property_types = []
         statuses = []
+        usage_types = []
+        facing = []
+        furnishing_statuses = []
+        infrastructure_terms = []
+        keywords = []
+    elif lookup_subject and lookup_terms:
+        intent = "property_search"
+        confidence = Decimal("0.9300")
+        reason_codes = [code for code in reason_codes if code not in LOOKUP_OVERRIDE_REASON_CODES]
+        reason_codes.extend(["lookup_subject_property", "structured_property_search"])
+        property_types = []
         usage_types = []
         facing = []
         furnishing_statuses = []
@@ -1094,6 +1257,7 @@ def build_structured_query_spec(query_text: str) -> StructuredQuerySpec | None:
         reason_codes.extend(["broad_inventory", "structured_property_search", "toolhouse_escalation_available"])
     elif has_structured_signal and (
         asks_for_listing
+        or mentions_inventory_noun
         or property_types
         or price_lt is not None
         or price_gt is not None
@@ -1119,6 +1283,8 @@ def build_structured_query_spec(query_text: str) -> StructuredQuerySpec | None:
         route_mode="instant",
         route_confidence=confidence,
         reason_codes=sorted(set(reason_codes)),
+        lookup_subject=lookup_subject,
+        lookup_terms=lookup_terms,
         property_types=property_types,
         address_terms=address_terms,
         uploader_names=uploader_names,

@@ -408,6 +408,73 @@ def test_toolhouse_deeper_review_retries_empty_response_once(
     assert agent_run.response_payload_json["status"] == "needs_more_evidence"
 
 
+@pytest.mark.golden
+def test_search_properties_tool_can_mint_query_scoped_evidence(
+    prepared_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    answer_payload = async_runner.run(answer_query("Show industrial listings over 30k SF under $25/SF."))
+    search_payload = async_runner.run(
+        search_properties_tool(
+            {
+                "property_types": ["industrial"],
+                "price_per_sq_ft_lt": "25",
+                "sq_ft_gte": 30000,
+                "limit": 5,
+            },
+            query_id=str(answer_payload["query_id"]),
+        )
+    )
+
+    assert search_payload["status"] == "ok"
+    assert search_payload["query_id"] == str(answer_payload["query_id"])
+    assert search_payload["evidence_expansion"]["status"] == "ok"
+    assert any(result["evidence_id"] for result in search_payload["results"])
+    assert "backend-minted" in search_payload["evidence_note"]
+
+
+@pytest.mark.golden
+def test_search_source_chunks_tool_can_mint_query_scoped_evidence(
+    prepared_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    answer_payload = async_runner.run(answer_query("Show industrial listings over 30k SF under $25/SF."))
+    chunk_payload = async_runner.run(
+        search_source_chunks_tool(
+            "loading dock yard logistics",
+            {"property_types": ["industrial"], "limit": 5},
+            query_id=str(answer_payload["query_id"]),
+        )
+    )
+
+    assert chunk_payload["status"] == "ok"
+    assert chunk_payload["query_id"] == str(answer_payload["query_id"])
+    assert chunk_payload["evidence_expansion"]["status"] == "ok"
+    assert any(result["evidence_id"] for result in chunk_payload["results"])
+    assert "backend-minted" in chunk_payload["evidence_note"]
+
+
+@pytest.mark.golden
+def test_find_property_conflicts_tool_inherits_query_scope_filters(
+    prepared_db: None,
+    async_runner: asyncio.Runner,
+) -> None:
+    answer_payload = async_runner.run(answer_query("Show office buildings under $50/sq ft."))
+
+    conflicts_payload = async_runner.run(
+        find_property_conflicts_tool(
+            {"price_per_sq_ft_lt": "50", "limit": 100},
+            query_id=str(answer_payload["query_id"]),
+            limit=5,
+        )
+    )
+
+    assert conflicts_payload["query_scope_filters_applied"]["property_types"] == ["office"]
+    assert conflicts_payload["conflict_count"] == 0
+    conditions = list(conflicts_payload["query_constructor"]["conditions"])
+    assert any(condition["field"] == "property_records.property_type" and condition["value"] == ["office"] for condition in conditions)
+
+
 def test_validate_agent_response_rejects_answer_without_citations() -> None:
     validation = validate_agent_response(
         allowed_evidence_ids={"11111111-1111-4111-8111-111111111111"},

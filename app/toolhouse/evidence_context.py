@@ -49,7 +49,7 @@ BACKEND_MCP_TOOL_GUIDE: list[dict[str, object]] = [
     {
         "name": "search_properties",
         "use_when": "Run structured searches over normalized property records by type, market, address, location, rent, sale price, cap rate, size, timing, uploader, and keywords.",
-        "citation_scope": "Read-only search result; use expand_query_evidence if the result must be cited in the final answer.",
+        "citation_scope": "Read-only unless query_id is provided; then returned evidence_id values are backend-minted for the current query.",
     },
     {
         "name": "aggregate_properties",
@@ -59,7 +59,7 @@ BACKEND_MCP_TOOL_GUIDE: list[dict[str, object]] = [
     {
         "name": "search_source_chunks",
         "use_when": "Search source chunks, raw text, and file names for operational wording, conflicts, amenities, and noisy terms.",
-        "citation_scope": "Read-only search result; use explain_evidence or expand_query_evidence for final citation IDs.",
+        "citation_scope": "Read-only unless query_id is provided; then returned evidence_id values are backend-minted for the current query.",
     },
     {
         "name": "get_source_detail",
@@ -219,12 +219,15 @@ def _recommended_mcp_calls(explain_payload: dict[str, Any]) -> list[dict[str, ob
                 {
                     "tool": "search_properties",
                     "why": "Try a broad structured-property search from any concrete property, market, type, or source terms in the user question or recovered Slack antecedent.",
-                    "arguments": {"filters": {"keywords": [str(explain_payload.get("query_text") or "")], "limit": 10}},
+                    "arguments": {
+                        "filters": {"keywords": [str(explain_payload.get("query_text") or "")], "limit": 10},
+                        "query_id": explain_payload.get("query_id"),
+                    },
                 },
                 {
                     "tool": "search_source_chunks",
                     "why": "Search raw source text for the user question terms before deciding that backend evidence is missing.",
-                    "arguments": {"query": explain_payload.get("query_text"), "filters": {"limit": 10}},
+                    "arguments": {"query": explain_payload.get("query_text"), "filters": {"limit": 10}, "query_id": explain_payload.get("query_id")},
                 },
                 {
                     "tool": "audit_data",

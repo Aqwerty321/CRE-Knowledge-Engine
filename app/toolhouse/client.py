@@ -95,6 +95,31 @@ def parse_toolhouse_response_payload(raw_response: str) -> tuple[dict[str, Any] 
     return payload, None
 
 
+def _slack_visible_context_payload(escalation_payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "original_query": escalation_payload.get("original_query"),
+        "heuristic_result": escalation_payload.get("heuristic_result"),
+        "route_mode": escalation_payload.get("route_mode"),
+        "reason_codes": escalation_payload.get("reason_codes", []),
+    }
+
+
+def _agent_context_payload(escalation_payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "filters": escalation_payload.get("filters"),
+        "decision_summary": escalation_payload.get("decision_summary"),
+        "allowed_evidence_ids": escalation_payload.get("allowed_evidence_ids", []),
+        "evidence": escalation_payload.get("evidence", []),
+        "evidence_context": escalation_payload.get("evidence_context"),
+        "backend_mcp_tools": escalation_payload.get("backend_mcp_tools"),
+        "slack_context": escalation_payload.get("slack_context"),
+        "thread_session": escalation_payload.get("thread_session"),
+        "follow_up": escalation_payload.get("follow_up"),
+        "follow_up_suggestion_context": escalation_payload.get("follow_up_suggestion_context"),
+        "explain_payload": escalation_payload.get("explain_payload"),
+    }
+
+
 def build_toolhouse_message(escalation_payload: dict[str, Any]) -> str:
     reason_codes = {str(value) for value in escalation_payload.get("reason_codes") or []}
     if "follow_up_agent" in reason_codes:
@@ -106,13 +131,19 @@ def build_toolhouse_message(escalation_payload: dict[str, Any]) -> str:
     message_payload = {
         **escalation_payload,
         "task": task,
+        "query_package_version": "toolhouse-query-package-v2",
+        "slack_visible_context": _slack_visible_context_payload(escalation_payload),
+        "agent_context": _agent_context_payload(escalation_payload),
         "instructions": (
             "Use CRE Backend MCP first. Return only the strict JSON object required by the "
             "CRE MCP Look Deeper Analyst output contract. For answered responses, cite at least one "
             "allowed evidence ID from this run. The initial payload includes evidence_context, backend_mcp_tools, "
+            "and explicit slack_visible_context versus agent_context sections. Treat slack_visible_context as the "
+            "presentation surface only; use agent_context, evidence_context, and backend MCP results for reasoning. "
             "and recommended MCP calls. Use describe_backend_schema, expand_query_context, summarize_inventory, "
             "rank_properties, get_property_timeline, find_property_conflicts, search_properties, aggregate_properties, "
             "search_source_chunks, get_source_detail, nearby_properties, and audit_data as needed. "
+            "search_properties accepts query_id when you want the backend to mint citable evidence IDs in the same call. "
             "If task is force_agent, the user intentionally bypassed instant routing; recover thread context when needed, "
             "then ground the answer through CRE Backend MCP before writing. "
             "If task is follow_up_agent, use thread_session.query_history, prior_accumulated_evidence_ids, "
@@ -124,7 +155,10 @@ def build_toolhouse_message(escalation_payload: dict[str, Any]) -> str:
             "antecedent recovery, then verify the recovered property through CRE Backend MCP and mint evidence before answering. "
             "If a useful backend result is not in allowed_evidence_ids, call expand_query_evidence for this query before "
             "citing it. If no backend evidence can be minted, return needs_more_evidence or external_context_only instead "
-            "of answering as fact. Do not post to Slack. Keep rendered_answer terse and aligned with "
+            "of answering as fact. If some candidate properties or secondary claims remain unsupported, narrow the answer "
+            "to the fully grounded subset, list the dropped claims in unsupported_claims_dropped, and still use answered "
+            "when the final rendered answer itself is fully supported. Use validation_risk only when unresolved support "
+            "materially affects the returned answer. Do not post to Slack. Keep rendered_answer terse and aligned with "
             "the backend instant-answer style: use a short bold heading or takeaway, 2 to 4 concise bullets max, "
             "no mode labels, no trust-receipt boilerplate, and only a short italic caveat when it materially helps. "
             "When comparing 2 to 5 properties, you may include a compact comparison_table object instead of repeating "

@@ -36,6 +36,7 @@ MCP_INSTRUCTIONS = """
 CRE Backend MCP is the evidence, retrieval, and controlled evidence-expansion surface for the CRE MCP Look Deeper Analyst.
 Use these tools for all CRE facts, source details, query explanation, aggregation, chunk search, proximity, audit state, and citation grounding.
 Use expand_query_evidence when a useful backend result needs a citable evidence ID for the current query.
+Pass query_id to search_properties or search_source_chunks when you want the backend to mint citable evidence IDs in the same call.
 Use nearby_properties for map, radius, coordinate, or distance-ranked questions; the backend uses PostGIS geography when available and numeric coordinate fallback otherwise.
 Use search_properties, aggregate_properties, summarize_inventory, and explain_query for investment-style questions involving sale price, cap rate, or location filters.
 Pass explicit `locations` filters for country, region, state, city, locality, neighborhood, submarket, postal code, or market screens; backend query packages may already include location filters resolved from property records even when vector services are disabled.
@@ -155,9 +156,9 @@ def create_cre_mcp_server() -> FastMCP:
         return await find_property_conflicts_tool(filters=filters, query_id=query_id, limit=limit)
 
     @mcp.tool()
-    async def search_properties(filters: dict[str, Any]) -> dict[str, Any]:
-        """Search normalized property records with structured filters and source provenance."""
-        return await search_properties_tool(filters)
+    async def search_properties(filters: dict[str, Any], query_id: str | None = None) -> dict[str, Any]:
+        """Search normalized property records with structured filters and source provenance, optionally minting query-scoped evidence IDs."""
+        return await search_properties_tool(filters, query_id=query_id)
 
     @mcp.tool()
     async def get_source_detail(source_id: str) -> dict[str, Any]:
@@ -174,9 +175,13 @@ def create_cre_mcp_server() -> FastMCP:
         return await aggregate_properties_tool(filters, group_by=group_by, metrics=metrics)
 
     @mcp.tool()
-    async def search_source_chunks(query: str, filters: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Search source chunks, raw source text, file names, and joined property context with keyword matching."""
-        return await search_source_chunks_tool(query, filters=filters)
+    async def search_source_chunks(
+        query: str,
+        filters: dict[str, Any] | None = None,
+        query_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Search source chunks, raw source text, file names, and joined property context, optionally minting query-scoped evidence IDs."""
+        return await search_source_chunks_tool(query, filters=filters, query_id=query_id)
 
     @mcp.tool()
     async def nearby_properties(origin: dict[str, Any] | str, radius_miles: float, filters: dict[str, Any] | None = None) -> dict[str, Any]:

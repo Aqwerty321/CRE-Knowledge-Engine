@@ -45,10 +45,10 @@ Implemented tools:
 - `rank_properties(filters, objective, keywords, query_id)`: ranks structured property matches for objectives like logistics fit, cheapest, largest, available soon, or balanced review.
 - `get_property_timeline(property_ref, query_id)`: traces one address/property/duplicate group across source history and can attach query evidence IDs.
 - `find_property_conflicts(filters, query_id, limit)`: finds duplicate property groups with conflicting size, rent, or availability and can expand query evidence for those records.
-- `search_properties(filters)`: deterministic structured property retrieval over normalized Postgres records, including explicit location, sale-price, cap-rate, and infrastructure filters.
+- `search_properties(filters, query_id)`: deterministic structured property retrieval over normalized Postgres records, including explicit location, sale-price, cap-rate, and infrastructure filters. Pass `query_id` when the returned results may need backend-minted citation IDs.
 - `get_source_detail(source_id)`: source metadata, chunks, and property rows for a source document.
 - `aggregate_properties(filters, group_by, metrics)`: backend-computed counts, square-footage totals, average square footage, average rent, and min/max rent by optional group.
-- `search_source_chunks(query, filters)`: keyword chunk search over source text, raw text, file names, and joined property records.
+- `search_source_chunks(query, filters, query_id)`: keyword chunk search over source text, raw text, file names, and joined property records. Pass `query_id` when chunk discoveries may need backend-minted citation IDs.
 - `nearby_properties(origin, radius_miles, filters)`: backend distance ranking from coordinates or a known property address, using PostGIS geography when available and numeric fallback otherwise.
 - `audit_data()`: corpus completeness, missing fields, conflict groups, and Toolhouse readiness state.
 

@@ -88,6 +88,41 @@ SERIALIZED_RICH_PROPERTY_FIELDS = [
 ]
 
 
+QUERY_SCOPE_FILTER_KEYS = (
+    "property_types",
+    "address_terms",
+    "uploader_names",
+    "markets",
+    "locations",
+    "statuses",
+    "usage_types",
+    "facing",
+    "furnishing_statuses",
+    "infrastructure_terms",
+)
+
+QUERY_SCOPE_SINGULAR_KEY_MAP = {
+    "property_type": "property_types",
+    "address": "address_terms",
+    "uploader_name": "uploader_names",
+    "market": "markets",
+    "location": "locations",
+    "status": "statuses",
+    "usage_type": "usage_types",
+    "furnishing_status": "furnishing_statuses",
+}
+
+QUERY_SCOPE_CONDITION_FIELD_MAP = {
+    "property_records.property_type": "property_types",
+    "property_records.address": "address_terms",
+    "property_records.market": "markets",
+    "property_records.status": "statuses",
+    "property_records.usage_type": "usage_types",
+    "property_records.facing": "facing",
+    "property_records.furnishing_status": "furnishing_statuses",
+}
+
+
 def _serialize_property_value(value: object) -> object:
     if isinstance(value, Decimal):
         return _serialize_decimal(value)
@@ -290,6 +325,61 @@ def _metric_payload(rows: list[tuple[PropertyRecord, SourceDocument, Chunk | Non
     return payload
 
 
+async def _query_scope_filters(query_id: str | None) -> dict[str, object]:
+    if not query_id:
+        return {}
+
+    try:
+        parsed_query_id = UUID(query_id)
+    except ValueError:
+        return {}
+
+    async with SessionFactory() as session:
+        snapshot = await session.scalar(select(AnswerSnapshot).where(AnswerSnapshot.query_id == parsed_query_id))
+    if snapshot is None:
+        return {}
+
+    filters_json = dict(snapshot.filters_json or {})
+    query_scope = {
+        key: filters_json[key]
+        for key in QUERY_SCOPE_FILTER_KEYS
+        if filters_json.get(key)
+    }
+    for singular_key, plural_key in QUERY_SCOPE_SINGULAR_KEY_MAP.items():
+        value = filters_json.get(singular_key)
+        if not value or query_scope.get(plural_key):
+            continue
+        query_scope[plural_key] = [value] if plural_key != "facing" else value
+
+    query_constructor = filters_json.get("query_constructor")
+    if isinstance(query_constructor, dict):
+        for condition in list(query_constructor.get("conditions", [])):
+            if not isinstance(condition, dict):
+                continue
+            filter_key = QUERY_SCOPE_CONDITION_FIELD_MAP.get(str(condition.get("field") or ""))
+            if not filter_key or query_scope.get(filter_key):
+                continue
+            value = condition.get("value")
+            if value in (None, "", []):
+                continue
+            query_scope[filter_key] = value
+    return query_scope
+
+
+def _merge_missing_query_scope_filters(
+    filters: dict[str, object],
+    query_scope_filters: dict[str, object],
+) -> tuple[dict[str, object], dict[str, object]]:
+    merged_filters = dict(filters)
+    applied_scope: dict[str, object] = {}
+    for key, value in query_scope_filters.items():
+        if merged_filters.get(key):
+            continue
+        merged_filters[key] = value
+        applied_scope[key] = value
+    return merged_filters, applied_scope
+
+
 async def explain_evidence_tool(query_id: str) -> dict[str, Any]:
     escalation_payload = await build_escalation_payload(query_id)
     return {
@@ -303,17 +393,40 @@ async def describe_backend_schema_tool() -> dict[str, Any]:
     return {"tool": "describe_backend_schema", "status": "ok", **build_backend_schema_context()}
 
 
-async def search_properties_tool(filters: dict[str, object]) -> dict[str, Any]:
+async def search_properties_tool(
+    filters: dict[str, object],
+    query_id: str | None = None,
+) -> dict[str, Any]:
+    bounded_filters = dict(filters or {})
+    bounded_filters["limit"] = max(1, min(50, int(bounded_filters.get("limit") or 10)))
     async with SessionFactory() as session:
-        matches = await retrieve_structured_property_matches(session, filters, dedupe=True)
+        matches = await retrieve_structured_property_matches(session, bounded_filters, dedupe=True)
+
+    evidence_by_property: dict[str, str] = {}
+    expansion_payload: dict[str, Any] | None = None
+    if query_id:
+        expansion_payload = await expand_query_evidence_tool(
+            query_id,
+            bounded_filters,
+            reason="search_properties query-aware expansion",
+        )
+        evidence_by_property = _evidence_ids_by_property(expansion_payload)
 
     return {
         "tool": "search_properties",
         "status": "ok",
-        "query_constructor": describe_query_constructor(filters),
+        "query_id": query_id,
+        "query_constructor": describe_query_constructor(bounded_filters),
         "result_count": len(matches),
+        "evidence_expansion": expansion_payload,
+        "evidence_note": (
+            "When query_id is provided, returned evidence_id values are backend-minted and may be cited after validation refresh."
+            if query_id
+            else "This read-only tool does not mint evidence IDs unless query_id is provided."
+        ),
         "results": [
             {
+                "evidence_id": evidence_by_property.get(str(match.property_record.id)),
                 "property_record": _serialize_property_record(match.property_record),
                 "source_document": _serialize_source_document(match.source_document),
                 "chunk": _serialize_chunk(match.chunk),
@@ -458,6 +571,151 @@ def _evidence_ids_by_property(expansion_payload: dict[str, Any]) -> dict[str, st
         if property_id and evidence_id:
             mapping[str(property_id)] = str(evidence_id)
     return mapping
+
+
+def _evidence_key_from_parts(
+    source_document: SourceDocument | None,
+    chunk: Chunk | None,
+    property_record: PropertyRecord | None,
+) -> tuple[str | None, str | None, str | None]:
+    return _evidence_key(
+        source_document.id if source_document is not None else None,
+        chunk.id if chunk is not None else None,
+        property_record.id if property_record is not None else None,
+    )
+
+
+async def _mint_query_evidence_rows(
+    *,
+    query_id: str,
+    reason: str,
+    result_rows: list[dict[str, object]],
+    expansion_meta: dict[str, object],
+) -> dict[str, Any]:
+    try:
+        parsed_query_id = UUID(query_id)
+    except ValueError:
+        return {"tool": "query_evidence_mint", "status": "invalid_query_id", "query_id": query_id}
+
+    async with SessionFactory() as session:
+        async with session.begin():
+            query_record = await session.get(Query, parsed_query_id)
+            if query_record is None:
+                return {"tool": "query_evidence_mint", "status": "query_not_found", "query_id": query_id}
+
+            snapshot = await session.scalar(select(AnswerSnapshot).where(AnswerSnapshot.query_id == parsed_query_id))
+            if snapshot is None:
+                return {"tool": "query_evidence_mint", "status": "snapshot_not_found", "query_id": query_id}
+
+            existing_rows = list((await session.execute(select(EvidenceItem).where(EvidenceItem.query_id == parsed_query_id))).scalars())
+            existing_by_key = {
+                _evidence_key(row.document_id, row.chunk_id, row.property_record_id): row
+                for row in existing_rows
+            }
+
+            minted_results: list[dict[str, object]] = []
+            evidence_records: list[EvidenceItem] = []
+            for item in result_rows:
+                source_document = item.get("_source_document_obj")
+                chunk = item.get("_chunk_obj")
+                property_record = item.get("_property_record_obj")
+                source_document = source_document if isinstance(source_document, SourceDocument) else None
+                chunk = chunk if isinstance(chunk, Chunk) else None
+                property_record = property_record if isinstance(property_record, PropertyRecord) else None
+                if source_document is None and chunk is None and property_record is None:
+                    continue
+
+                key = _evidence_key_from_parts(source_document, chunk, property_record)
+                existing = existing_by_key.get(key)
+                if existing is None:
+                    source_summary = None
+                    if source_document is not None:
+                        if property_record is not None:
+                            source_summary = _source_summary(property_record, source_document, chunk)
+                        else:
+                            source_summary = _source_label(source_document)
+                            detail_parts: list[str] = []
+                            if chunk is not None and chunk.page_number is not None:
+                                detail_parts.append(f"p. {chunk.page_number}")
+                            if chunk is not None and chunk.row_number is not None:
+                                detail_parts.append(f"row {chunk.row_number}")
+                            if detail_parts:
+                                source_summary = f"{source_summary} ({'; '.join(detail_parts)})"
+
+                    existing = EvidenceItem(
+                        query_id=parsed_query_id,
+                        document_id=source_document.id if source_document is not None else None,
+                        chunk_id=chunk.id if chunk is not None else None,
+                        property_record_id=property_record.id if property_record is not None else None,
+                        relevance_score=Decimal(str(item.get("_raw_relevance_score") or item.get("relevance_score") or "0.5000")),
+                        matched_fields=list(item.get("matched_terms") or item.get("matched_fields") or []),
+                        source_summary=source_summary,
+                    )
+                    session.add(existing)
+                    existing_by_key[key] = existing
+                    was_added = True
+                else:
+                    was_added = False
+
+                evidence_records.append(existing)
+                minted_results.append(
+                    {
+                        "evidence_id": existing,
+                        "was_added": was_added,
+                        "source_document": item.get("source_document"),
+                        "chunk": item.get("chunk"),
+                        "property_record": item.get("property_record"),
+                        "matched_terms": list(item.get("matched_terms") or []),
+                        "relevance_score": item.get("relevance_score"),
+                        "selection_reason": item.get("selection_reason"),
+                    }
+                )
+
+            await session.flush()
+
+            ordered_ids = list(snapshot.evidence_ids or [])
+            existing_order = {str(value) for value in ordered_ids}
+            for evidence_record in evidence_records:
+                evidence_id = str(evidence_record.id)
+                if evidence_id not in existing_order:
+                    ordered_ids.append(evidence_record.id)
+                    existing_order.add(evidence_id)
+            snapshot.evidence_ids = ordered_ids
+
+            filters_json = dict(snapshot.filters_json or {})
+            expansions = list(filters_json.get("evidence_expansions") or [])
+            expansions.append(
+                {
+                    "tool": str(expansion_meta.get("tool") or "query_evidence_mint"),
+                    "reason": reason,
+                    **expansion_meta,
+                    "matched_count": len(minted_results),
+                    "added_count": sum(1 for item in minted_results if item["was_added"]),
+                }
+            )
+            filters_json["evidence_expansions"] = expansions[-10:]
+            snapshot.filters_json = filters_json
+
+            results = [
+                {
+                    **item,
+                    "evidence_id": str(item["evidence_id"].id),
+                }
+                for item in minted_results
+            ]
+            return {
+                "tool": str(expansion_meta.get("tool") or "query_evidence_mint"),
+                "status": "ok" if results else "no_results",
+                "query_id": query_id,
+                "reason": reason,
+                "result_count": len(results),
+                "added_count": sum(1 for item in results if item["was_added"]),
+                "allowed_evidence_ids_added": [item["evidence_id"] for item in results if item["was_added"]],
+                "allowed_evidence_ids_reused": [item["evidence_id"] for item in results if not item["was_added"]],
+                "allowed_evidence_ids_total": [str(value) for value in ordered_ids],
+                "evidence_note": "These IDs are now backend-minted evidence for the original query and may be cited after validation refresh.",
+                "results": results,
+            }
 
 
 def _objective_terms(objective: str | None, keywords: list[str] | None) -> set[str]:
@@ -735,6 +993,8 @@ async def find_property_conflicts_tool(
     limit: int = 10,
 ) -> dict[str, Any]:
     bounded_filters = dict(filters or {})
+    query_scope_filters = await _query_scope_filters(query_id)
+    bounded_filters, applied_scope = _merge_missing_query_scope_filters(bounded_filters, query_scope_filters)
     bounded_filters["limit"] = max(1, min(100, int(bounded_filters.get("limit") or 100)))
     async with SessionFactory() as session:
         rows = list((await session.execute(build_property_query(bounded_filters))).all())
@@ -760,10 +1020,13 @@ async def find_property_conflicts_tool(
             address = str(conflict.get("address") or "")
             if not address:
                 continue
+            expansion_filters = dict(query_scope_filters)
+            expansion_filters["address_terms"] = [_normalize_text(address)]
+            expansion_filters["limit"] = 10
             expansion_payloads.append(
                 await expand_query_evidence_tool(
                     query_id,
-                    {"address_terms": [_normalize_text(address)], "limit": 10},
+                    expansion_filters,
                     reason=f"find_property_conflicts address={address}",
                 )
             )
@@ -773,6 +1036,7 @@ async def find_property_conflicts_tool(
         "status": "ok" if conflicts else "no_conflicts",
         "query_id": query_id,
         "query_constructor": describe_query_constructor(bounded_filters),
+        "query_scope_filters_applied": applied_scope,
         "conflict_count": len(conflicts),
         "evidence_expansions": expansion_payloads,
         "conflicts": conflicts,
@@ -849,7 +1113,11 @@ async def aggregate_properties_tool(
     }
 
 
-async def search_source_chunks_tool(query: str, filters: dict[str, object] | None = None) -> dict[str, Any]:
+async def search_source_chunks_tool(
+    query: str,
+    filters: dict[str, object] | None = None,
+    query_id: str | None = None,
+) -> dict[str, Any]:
     filters = filters or {}
     terms = _search_terms(query)
     if not terms:
@@ -937,6 +1205,10 @@ async def search_source_chunks_tool(query: str, filters: dict[str, object] | Non
                 continue
             vector_results.append(
                 {
+                    "_source_document_obj": match.source_document,
+                    "_chunk_obj": match.chunk,
+                    "_property_record_obj": match.property_record,
+                    "_raw_relevance_score": match.relevance_score,
                     "source_document": _serialize_source_document(match.source_document),
                     "chunk": _serialize_chunk(match.chunk),
                     "property_record": _serialize_property_record(match.property_record),
@@ -948,14 +1220,69 @@ async def search_source_chunks_tool(query: str, filters: dict[str, object] | Non
                 }
             )
         if vector_results:
+            evidence_expansion = None
+            evidence_by_key: dict[tuple[str | None, str | None, str | None], str] = {}
+            if query_id:
+                evidence_expansion = await _mint_query_evidence_rows(
+                    query_id=query_id,
+                    reason=f"search_source_chunks query={query}",
+                    result_rows=vector_results[:limit],
+                    expansion_meta={
+                        "tool": "search_source_chunks",
+                        "retrieval_mode": "qdrant_vector_rerank",
+                        "query": query,
+                        "matched_terms": terms,
+                    },
+                )
+                for item in list(evidence_expansion.get("results") or []):
+                    source_document = dict(item.get("source_document") or {})
+                    chunk = dict(item.get("chunk") or {})
+                    property_record = dict(item.get("property_record") or {})
+                    evidence_id = item.get("evidence_id")
+                    if evidence_id:
+                        evidence_by_key[
+                            (
+                                str(source_document.get("id")) if source_document.get("id") else None,
+                                str(chunk.get("id")) if chunk.get("id") else None,
+                                str(property_record.get("id")) if property_record.get("id") else None,
+                            )
+                        ] = str(evidence_id)
+            shaped_results = []
+            for item in vector_results[:limit]:
+                shaped_results.append(
+                    {
+                        "evidence_id": evidence_by_key.get(
+                            _evidence_key(
+                                dict(item.get("source_document") or {}).get("id"),
+                                dict(item.get("chunk") or {}).get("id"),
+                                dict(item.get("property_record") or {}).get("id"),
+                            )
+                        ),
+                        "source_document": item["source_document"],
+                        "chunk": item["chunk"],
+                        "property_record": item["property_record"],
+                        "matched_terms": item["matched_terms"],
+                        "relevance_score": item["relevance_score"],
+                        "selection_reason": item["selection_reason"],
+                        "vector_score": item["vector_score"],
+                        "rerank_score": item["rerank_score"],
+                    }
+                )
             return {
                 "tool": "search_source_chunks",
                 "status": "ok",
                 "query": query,
+                "query_id": query_id,
                 "retrieval_mode": "qdrant_vector_rerank",
                 "matched_terms": terms,
-                "result_count": len(vector_results[:limit]),
-                "results": vector_results[:limit],
+                "result_count": len(shaped_results),
+                "evidence_expansion": evidence_expansion,
+                "evidence_note": (
+                    "When query_id is provided, returned evidence_id values are backend-minted and may be cited after validation refresh."
+                    if query_id
+                    else "This read-only tool does not mint evidence IDs unless query_id is provided."
+                ),
+                "results": shaped_results,
             }
 
     async with SessionFactory() as session:
@@ -985,6 +1312,10 @@ async def search_source_chunks_tool(query: str, filters: dict[str, object] | Non
         freshness = float(property_record.freshness_score or Decimal("0")) if property_record is not None else 0.0
         results.append(
             {
+                "_source_document_obj": source_document,
+                "_chunk_obj": chunk,
+                "_property_record_obj": property_record,
+                "_raw_relevance_score": Decimal(_bounded_score(0.45 + (0.12 * len(matches)) + (0.15 * authority) + (0.08 * freshness))),
                 "source_document": _serialize_source_document(source_document),
                 "chunk": _serialize_chunk(chunk),
                 "property_record": _serialize_property_record(property_record),
@@ -995,14 +1326,67 @@ async def search_source_chunks_tool(query: str, filters: dict[str, object] | Non
         )
 
     results.sort(key=lambda item: str(item["relevance_score"]), reverse=True)
+    evidence_expansion = None
+    evidence_by_key: dict[tuple[str | None, str | None, str | None], str] = {}
+    if query_id:
+        evidence_expansion = await _mint_query_evidence_rows(
+            query_id=query_id,
+            reason=f"search_source_chunks query={query}",
+            result_rows=results[:limit],
+            expansion_meta={
+                "tool": "search_source_chunks",
+                "retrieval_mode": "keyword_chunk_search",
+                "query": query,
+                "matched_terms": terms,
+            },
+        )
+        for item in list(evidence_expansion.get("results") or []):
+            source_document = dict(item.get("source_document") or {})
+            chunk = dict(item.get("chunk") or {})
+            property_record = dict(item.get("property_record") or {})
+            evidence_id = item.get("evidence_id")
+            if evidence_id:
+                evidence_by_key[
+                    (
+                        str(source_document.get("id")) if source_document.get("id") else None,
+                        str(chunk.get("id")) if chunk.get("id") else None,
+                        str(property_record.get("id")) if property_record.get("id") else None,
+                    )
+                ] = str(evidence_id)
+    shaped_results = []
+    for item in results[:limit]:
+        shaped_results.append(
+            {
+                "evidence_id": evidence_by_key.get(
+                    _evidence_key(
+                        dict(item.get("source_document") or {}).get("id"),
+                        dict(item.get("chunk") or {}).get("id"),
+                        dict(item.get("property_record") or {}).get("id"),
+                    )
+                ),
+                "source_document": item["source_document"],
+                "chunk": item["chunk"],
+                "property_record": item["property_record"],
+                "matched_terms": item["matched_terms"],
+                "relevance_score": item["relevance_score"],
+                "selection_reason": item["selection_reason"],
+            }
+        )
     return {
         "tool": "search_source_chunks",
         "status": "ok",
         "query": query,
+        "query_id": query_id,
         "retrieval_mode": "keyword_chunk_search",
         "matched_terms": terms,
-        "result_count": len(results[:limit]),
-        "results": results[:limit],
+        "result_count": len(shaped_results),
+        "evidence_expansion": evidence_expansion,
+        "evidence_note": (
+            "When query_id is provided, returned evidence_id values are backend-minted and may be cited after validation refresh."
+            if query_id
+            else "This read-only tool does not mint evidence IDs unless query_id is provided."
+        ),
+        "results": shaped_results,
     }
 
 

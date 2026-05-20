@@ -14,6 +14,7 @@ from app.models import AnswerSnapshot, Chunk, EvidenceItem, PropertyFieldValue, 
 from app.retrieval import (
     HybridChunkMatch,
     StructuredPropertyMatch,
+    build_property_query,
     collect_data_quality_report,
     describe_query_constructor,
     explain_no_results,
@@ -123,7 +124,12 @@ def _format_cap_rate(value: Decimal | None) -> str | None:
     return f"cap rate {(value * Decimal('100')):,.2f}%"
 
 
-def _rich_detail_suffix(property_record: PropertyRecord, *, include_map: bool = False) -> str:
+def _rich_detail_suffix(
+    property_record: PropertyRecord,
+    *,
+    include_map: bool = False,
+    include_facing: bool = False,
+) -> str:
     details = [
         value
         for value in [
@@ -132,6 +138,7 @@ def _rich_detail_suffix(property_record: PropertyRecord, *, include_map: bool = 
             f"{property_record.clear_height_ft} ft clear" if property_record.clear_height_ft is not None else None,
             f"{property_record.dock_doors} dock door(s)" if property_record.dock_doors is not None else None,
             f"{property_record.parking_spaces} parking space(s)" if property_record.parking_spaces is not None else None,
+            f"{property_record.facing.replace('_', ' ')} frontage" if include_facing and property_record.facing else None,
             f"{property_record.city or property_record.locality}" if property_record.city or property_record.locality else None,
         ]
         if value
@@ -139,6 +146,21 @@ def _rich_detail_suffix(property_record: PropertyRecord, *, include_map: bool = 
     if include_map and property_record.map_url:
         details.append(f"Map: {property_record.map_url}")
     return "" if not details else f" ({'; '.join(details)})"
+
+
+def _exact_lookup_ops_detail(property_record: PropertyRecord) -> str | None:
+    details = str(property_record.loading_access or "").strip()
+    if not details:
+        return None
+
+    if property_record.dock_doors is not None:
+        dock_label = f"{property_record.dock_doors} dock door(s)"
+        if details == dock_label:
+            return None
+        if details.startswith(f"{dock_label}, "):
+            details = details[len(f"{dock_label}, ") :]
+
+    return details or None
 
 
 def _unique_addresses(items: list[RetrievedEvidence]) -> list[str]:
@@ -383,6 +405,27 @@ def _snapshot_filters_for_plan(
     return filters
 
 
+def _query_evidence_details_for_plan(
+    plan: QueryPlan,
+    items: list[RetrievedEvidence],
+    evidence_records: list[EvidenceItem],
+) -> dict[str, dict[str, object]]:
+    if plan.query_type != "proximity":
+        return {}
+
+    anchor_address = str(plan.filters.get("anchor_address") or "")
+    details_by_evidence_id: dict[str, dict[str, object]] = {}
+    for item, evidence_record in zip(items, evidence_records):
+        details: dict[str, object] = {}
+        if item.distance_km is not None:
+            details["distance_km"] = round(float(item.distance_km), 3)
+        if anchor_address:
+            details["anchor_address"] = anchor_address
+        if details:
+            details_by_evidence_id[str(evidence_record.id)] = details
+    return details_by_evidence_id
+
+
 def _slack_context_payload(
     *,
     slack_channel_id: str | None,
@@ -438,28 +481,65 @@ def _build_evidence_item(
 
 
 async def _retrieve_proximity(session: AsyncSession, plan: QueryPlan) -> list[RetrievedEvidence]:
-    rows = await _fetch_property_rows(
-        session,
-        (PropertyRecord.geo_lat.is_not(None), PropertyRecord.geo_lng.is_not(None), PropertyRecord.address.is_not(None))
-    )
     anchor_lat = float(plan.filters["anchor_lat"])
     anchor_lng = float(plan.filters["anchor_lng"])
     limit = int(plan.filters["limit"])
+    proximity_query_filters = dict(plan.filters.get("proximity_query_filters") or {})
+
+    structured_matches: list[StructuredPropertyMatch] | None = None
+    if proximity_query_filters:
+        search_filters = dict(proximity_query_filters)
+        search_filters["requires_coordinates"] = True
+        search_filters["limit"] = int(plan.filters.get("candidate_limit") or max(limit * 20, 50))
+        rows = await session.execute(build_property_query(search_filters))
+        structured_matches = [
+            StructuredPropertyMatch(
+                property_record=property_record,
+                source_document=source_document,
+                chunk=chunk,
+                matched_fields=[],
+                relevance_score=Decimal("0.5000"),
+                selection_reason="structured proximity candidate",
+            )
+            for property_record, source_document, chunk in rows
+        ]
+    else:
+        rows = await _fetch_property_rows(
+            session,
+            (PropertyRecord.geo_lat.is_not(None), PropertyRecord.geo_lng.is_not(None), PropertyRecord.address.is_not(None))
+        )
+        structured_matches = [
+            StructuredPropertyMatch(
+                property_record=property_record,
+                source_document=source_document,
+                chunk=chunk,
+                matched_fields=["geo_lat", "geo_lng", "availability"],
+                relevance_score=Decimal("0.5000"),
+                selection_reason="distance-ranked anchor match",
+            )
+            for property_record, source_document, chunk in rows
+        ]
 
     items: list[RetrievedEvidence] = []
-    for property_record, source_document, chunk in rows:
+    for match in structured_matches:
+        property_record = match.property_record
+        source_document = match.source_document
+        chunk = match.chunk
         if property_record.geo_lat is None or property_record.geo_lng is None:
             continue
 
         distance_km = _distance_km(anchor_lat, anchor_lng, float(property_record.geo_lat), float(property_record.geo_lng))
+        matched_fields = sorted(set([*match.matched_fields, "geo_lat", "geo_lng"])) or ["geo_lat", "geo_lng", "availability"]
         items.append(
             _build_evidence_item(
                 property_record,
                 source_document,
                 chunk,
                 relevance_score=_to_decimal_score(1 / (1 + distance_km)),
-                matched_fields=["geo_lat", "geo_lng", "availability"],
+                matched_fields=matched_fields,
                 distance_km=distance_km,
+                selection_reason=match.selection_reason,
+                retrieval_metadata={"proximity_prefiltered": bool(proximity_query_filters)},
             )
         )
 
@@ -737,6 +817,37 @@ def _inventory_summary(items: list[RetrievedEvidence]) -> dict[str, object]:
     }
 
 
+def _facet_counts(items: list[RetrievedEvidence], field_name: str) -> list[tuple[str, int]]:
+    counts: dict[str, int] = {}
+    for item in items:
+        value = getattr(item.property_record, field_name, None)
+        normalized_value = str(value or "").strip()
+        if not normalized_value:
+            continue
+        counts[normalized_value] = counts.get(normalized_value, 0) + 1
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+
+
+def _facet_label(field_name: str) -> str:
+    return {
+        "facing": "Facing",
+    }.get(field_name, field_name.replace("_", " ").title())
+
+
+def _format_facet_value(field_name: str, value: str) -> str:
+    if field_name in {"facing", "property_type", "furnishing_status"}:
+        return value.replace("_", " ")
+    return value
+
+
+def _matching_listing_scope(plan: QueryPlan, item_count: int) -> str:
+    statuses = [str(value) for value in plan.filters.get("statuses") or []]
+    listing_label = "listing" if item_count == 1 else "listings"
+    if statuses == ["available"]:
+        return f"available sourced {listing_label}"
+    return f"matching sourced {listing_label}"
+
+
 async def _retrieve_inventory_overview(
     session: AsyncSession,
     plan: QueryPlan,
@@ -901,12 +1012,23 @@ def _render_data_quality_answer(report: dict[str, object]) -> str:
 def _render_generic_property_search(plan: QueryPlan, items: list[RetrievedEvidence]) -> str:
     title = "Found" if len(items) != 1 else "Found one"
     include_map = bool(plan.filters.get("requires_coordinates"))
-    lines = [f"*{title} {len(items)} matching sourced listing(s)*"]
+    include_facing = bool(plan.filters.get("facing"))
+    subject_summary = ""
+    lookup_subject = str(plan.filters.get("lookup_subject") or "").strip()
+    if "lookup_subject_property" in plan.reason_codes and lookup_subject and len(items) <= 2:
+        subject_summary = f" for {lookup_subject.title()}"
+    location_summary = ""
+    if not subject_summary and {"lookup_subject_location", "lookup_subject_property"} & set(plan.reason_codes):
+        locations = [str(value) for value in plan.filters.get("locations") or [] if str(value).strip()]
+        if len(locations) == 1:
+            location_summary = f" in {locations[0].title()}"
+    lines = [f"*{title} {len(items)} matching sourced listing(s){subject_summary or location_summary}*"]
     for item in items:
         lines.append(
             f"- *{item.property_record.address}* - {_format_property_type(item.property_record.property_type)}, "
             f"{_format_sq_ft(item.property_record.sq_ft)} at {_format_price(item.property_record.price_per_sq_ft)}, "
-            f"{item.property_record.availability or 'availability unknown'}{_rich_detail_suffix(item.property_record, include_map=include_map)}. "
+            f"{item.property_record.availability or 'availability unknown'}"
+            f"{_rich_detail_suffix(item.property_record, include_map=include_map, include_facing=include_facing)}. "
             f"Source: {item.source_summary}"
         )
     lines.extend(["", f"_Direct match - {len(items)} source(s) checked._"])
@@ -970,6 +1092,9 @@ def _render_generic_exact_lookup(items: list[RetrievedEvidence]) -> str:
         f"{_format_property_type(selected.property_record.property_type)} at {_format_price(selected.property_record.price_per_sq_ft)}, "
         f"available {selected.property_record.availability or 'unknown'}{_rich_detail_suffix(selected.property_record, include_map=True)}."
     ]
+    ops_detail = _exact_lookup_ops_detail(selected.property_record)
+    if ops_detail:
+        lines.append(f"- Ops details: {ops_detail}.")
     lines.extend(["", "*Sources checked:*" ])
     for item in items[:5]:
         lines.append(f"- {item.source_summary}")
@@ -981,6 +1106,24 @@ def _render_generic_exact_lookup(items: list[RetrievedEvidence]) -> str:
 def _render_generic_aggregation(plan: QueryPlan, items: list[RetrievedEvidence]) -> str:
     aggregate = str(plan.filters.get("aggregate") or "count")
     aggregate_field = str(plan.filters.get("aggregate_field") or "property_records")
+    if aggregate == "facet_counts":
+        facet_counts = _facet_counts(items, aggregate_field)
+        facet_label = _facet_label(aggregate_field)
+        scope_label = _matching_listing_scope(plan, len(items))
+        if not facet_counts:
+            return (
+                f"*{facet_label} summary*\n"
+                f"I found {len(items)} {scope_label}, but none has a structured {facet_label.lower()} value yet."
+            )
+
+        lines = [
+            f"*{facet_label} summary*",
+            f"I found {len(facet_counts)} distinct {facet_label.lower()} values across {len(items)} {scope_label}:",
+        ]
+        for value, count in facet_counts:
+            lines.append(f"- *{_format_facet_value(aggregate_field, value)}* - {count} listing(s)")
+        return "\n".join(lines)
+
     if aggregate == "count":
         headline = f"Counted {len(items)} matching sourced property record(s)."
     elif aggregate == "average" and aggregate_field == "price_per_sq_ft":
@@ -1029,6 +1172,17 @@ def _render_generic_tenant_fit(items: list[RetrievedEvidence]) -> str:
 def _build_comparison_table(plan: QueryPlan, items: list[RetrievedEvidence]) -> dict[str, object] | None:
     if len(items) < 2:
         return None
+
+    if plan.query_type == "generic_aggregation" and str(plan.filters.get("aggregate") or "") == "facet_counts":
+        aggregate_field = str(plan.filters.get("aggregate_field") or "")
+        facet_counts = _facet_counts(items, aggregate_field)
+        if len(facet_counts) < 2:
+            return None
+        return {
+            "title": f"{_facet_label(aggregate_field)} summary",
+            "columns": [_facet_label(aggregate_field), "Count"],
+            "rows": [[_format_facet_value(aggregate_field, value), str(count)] for value, count in facet_counts],
+        }
 
     if plan.query_type == "proximity":
         columns = ["Addr", "SF", "Rent", "Dist"]
@@ -1292,16 +1446,21 @@ async def answer_query(
                 evidence_records.append(evidence_record)
 
             await session.flush()
+            snapshot_filters = _snapshot_filters_for_plan(
+                plan,
+                no_results_context=no_results_context,
+                inventory_summary=inventory_summary,
+                slack_context=slack_context,
+            )
+            query_evidence_details = _query_evidence_details_for_plan(plan, items, evidence_records)
+            if query_evidence_details:
+                snapshot_filters["query_evidence_details"] = query_evidence_details
+
             snapshot = AnswerSnapshot(
                 query_id=query_record.id,
                 rendered_answer=rendered_answer,
                 route_mode=plan.route_mode,
-                filters_json=_snapshot_filters_for_plan(
-                    plan,
-                    no_results_context=no_results_context,
-                    inventory_summary=inventory_summary,
-                    slack_context=slack_context,
-                ),
+                filters_json=snapshot_filters,
                 evidence_ids=[record.id for record in evidence_records],
                 dependency_state_json=_dependency_state_for_result(plan, items),
                 model_versions_json=_model_versions_for_plan(plan),
@@ -1427,7 +1586,9 @@ async def explain_query(query_id: str) -> dict[str, object]:
         snapshot_evidence_order = {
             evidence_id: index for index, evidence_id in enumerate(snapshot.evidence_ids if snapshot is not None else [])
         }
+        filters = snapshot.filters_json if snapshot is not None else {}
         evidence_bundle: list[dict[str, object]] = []
+        query_evidence_details = dict(filters.get("query_evidence_details") or {}) if isinstance(filters, dict) else {}
         for evidence_item, source_document, chunk, property_record in evidence_rows:
             matched_field_names = list(evidence_item.matched_fields or [])
             field_details: list[dict[str, object]] = []
@@ -1440,24 +1601,30 @@ async def explain_query(query_id: str) -> dict[str, object]:
                 )
                 field_details = [_serialize_field_value(field_value) for field_value in field_result.scalars()]
 
-            evidence_bundle.append(
-                {
-                    "evidence_id": str(evidence_item.id),
-                    "relevance_score": _serialize_decimal(evidence_item.relevance_score),
-                    "matched_fields": matched_field_names,
-                    "source_summary": evidence_item.source_summary,
-                    "source_document": _serialize_source_document(source_document),
-                    "property_record": _serialize_property_record(property_record),
-                    "chunk": _serialize_chunk(chunk),
-                    "field_details": field_details,
-                }
-            )
+            item = {
+                "evidence_id": str(evidence_item.id),
+                "relevance_score": _serialize_decimal(evidence_item.relevance_score),
+                "matched_fields": matched_field_names,
+                "source_summary": evidence_item.source_summary,
+                "source_document": _serialize_source_document(source_document),
+                "property_record": _serialize_property_record(property_record),
+                "chunk": _serialize_chunk(chunk),
+                "field_details": field_details,
+            }
+            query_scoped_detail = query_evidence_details.get(str(evidence_item.id))
+            if isinstance(query_scoped_detail, dict):
+                item["query_scoped_details"] = query_scoped_detail
+                if query_scoped_detail.get("distance_km") is not None:
+                    item["distance_km"] = query_scoped_detail["distance_km"]
+                if query_scoped_detail.get("anchor_address"):
+                    item["anchor_address"] = query_scoped_detail["anchor_address"]
+
+            evidence_bundle.append(item)
 
         evidence_bundle.sort(
             key=lambda item: snapshot_evidence_order.get(UUID(str(item["evidence_id"])), len(snapshot_evidence_order))
         )
 
-        filters = snapshot.filters_json if snapshot is not None else {}
         dependency_state = snapshot.dependency_state_json if snapshot is not None else {}
         model_versions = snapshot.model_versions_json if snapshot is not None else {}
         plan = build_query_plan(query_record.query_text)
@@ -1543,6 +1710,28 @@ async def explain_query(query_id: str) -> dict[str, object]:
             decision_summary = {
                 "selected_addresses": selected_addresses,
                 "selection_reason": "PostgreSQL structured query constructor over normalized property records",
+                "query_constructor": filters.get("query_constructor"),
+            }
+
+        if plan.query_type == "proximity" and evidence_bundle:
+            selected_addresses: list[str] = []
+            anchor_address = str(filters.get("anchor_address") or "the anchor address")
+            for item in evidence_bundle:
+                property_record = item["property_record"]
+                item["evidence_role"] = "result"
+                if item.get("distance_km") is not None:
+                    item["selection_reason"] = (
+                        f"distance-ranked from {anchor_address} at {float(item['distance_km']):.3f} km"
+                    )
+                else:
+                    item["selection_reason"] = f"distance-ranked from {anchor_address}"
+                if property_record is not None and property_record.get("address") is not None:
+                    selected_addresses.append(str(property_record["address"]))
+
+            decision_summary = {
+                "selected_addresses": selected_addresses,
+                "anchor_address": anchor_address,
+                "selection_reason": f"distance-ranked from {anchor_address}",
                 "query_constructor": filters.get("query_constructor"),
             }
 

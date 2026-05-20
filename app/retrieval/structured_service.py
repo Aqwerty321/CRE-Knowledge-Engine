@@ -59,6 +59,8 @@ def describe_query_constructor(filters: dict[str, object]) -> dict[str, object]:
 
     if filters.get("property_types"):
         conditions.append({"field": "property_records.property_type", "op": "in", "value": filters["property_types"]})
+    if filters.get("lookup_terms"):
+        conditions.append({"field": "property_records.property_name_or_listing_id", "op": "contains_any", "value": filters["lookup_terms"]})
     if filters.get("address_terms"):
         conditions.append({"field": "property_records.normalized_address", "op": "contains_any", "value": filters["address_terms"]})
     if filters.get("uploader_names"):
@@ -125,6 +127,20 @@ def _build_conditions(filters: dict[str, object]) -> list[object]:
     property_types = [str(value) for value in filters.get("property_types") or []]
     if property_types:
         conditions.append(PropertyRecord.property_type.in_(property_types))
+
+    lookup_terms = [str(value) for value in filters.get("lookup_terms") or []]
+    if lookup_terms:
+        conditions.append(
+            or_(
+                *[
+                    or_(
+                        PropertyRecord.property_name.ilike(f"%{term}%"),
+                        PropertyRecord.listing_id.ilike(f"%{term}%"),
+                    )
+                    for term in lookup_terms
+                ]
+            )
+        )
 
     address_terms = [str(value) for value in filters.get("address_terms") or []]
     if address_terms:
@@ -370,6 +386,8 @@ def _score(match_count: int, property_record: PropertyRecord) -> Decimal:
 
 def _matched_fields(filters: dict[str, object], property_record: PropertyRecord, chunk: Chunk | None) -> list[str]:
     fields: list[str] = []
+    if filters.get("lookup_terms"):
+        fields.append("property_name")
     if filters.get("property_types"):
         fields.append("property_type")
     if filters.get("address_terms"):
