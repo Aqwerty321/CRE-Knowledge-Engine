@@ -33,11 +33,18 @@ class BM25LexicalRetriever:
             return []
 
         try:
-            corpus_tokens = bm25s.tokenize([document.text for document in documents])
+            corpus_tokens = bm25s.tokenize(
+                [document.text for document in documents],
+                show_progress=False,
+            )
             retriever = bm25s.BM25()
-            retriever.index(corpus_tokens)
-            query_tokens = bm25s.tokenize([query_text])
-            results = retriever.retrieve(query_tokens, k=min(limit, len(documents)))
+            retriever.index(corpus_tokens, show_progress=False)
+            query_tokens = bm25s.tokenize([query_text], show_progress=False)
+            results = retriever.retrieve(
+                query_tokens,
+                k=min(limit, len(documents)),
+                show_progress=False,
+            )
         except Exception:  # noqa: BLE001 - local retrieval should degrade to other layers
             return []
 

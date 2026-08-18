@@ -28,3 +28,21 @@ The high-signal expanded queries are:
 
 The dataset is aligned with [docs/sample-data-and-evaluation.md](../docs/sample-data-and-evaluation.md).
 
+## Planned Gmail Pivot Fixtures
+
+The current fixture set remains the regression baseline for the working Slack application. Gmail-pivot fixtures should be added as a separate, sanitized corpus; do not commit the supplied raw customer emails, names, addresses, signatures, tracking links, or OAuth data.
+
+The first demo email corpus should be created as ten real messages sent from a secondary Gmail account into a `CRE-DEMO` label. For deterministic extractor tests, commit only sanitized text/JSON payloads captured from those test messages—not private mailbox exports. The corpus should include:
+
+- prior listing and availability emails as the searchable supply history;
+- a later, held-out tenant requirement that is not accompanied by the human-written answer;
+- nested forwards and replies with distinct original, forwarded, received, and processed times;
+- HTML-only marketing mail, inline images, and representative PDF/XLSX attachments;
+- signatures, legal disclaimers, unsubscribe content, tracking links, and provider AI summaries;
+- corrections, conditional statements, ambiguous suite aliases, and changing availability;
+- a deletion/tombstone case and an access-scope isolation case;
+- adversarial instructions in message or attachment content to verify that evidence cannot authorize actions.
+
+The release-blocking regression is the supplied sample's current failure mode: the new pipeline must extract the real requirement and the property represented by sanitized alias `Project Alpha` while producing zero property records for either sanitized legal-footer address. Evaluation fixtures must keep source history earlier than the held-out requirement so response retrieval cannot leak the answer being scored.
+
+See the [Gmail RAG pivot roadmap](../docs/gmail-rag-pivot-roadmap.md) for the fixture contract, expected CRE claims, and phase gates.

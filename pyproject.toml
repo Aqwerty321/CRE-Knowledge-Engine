@@ -27,6 +27,8 @@ dependencies = [
 
 [project.scripts]
 cre-cli = "app.cli:main"
+gmail-demo-check = "gmail_demo.check_env:main"
+gmail-demo-seed = "gmail_demo.seed:main"
 
 [dependency-groups]
 dev = [
@@ -38,14 +40,14 @@ dev = [
 default-groups = ["dev"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["app"]
+packages = ["app", "gmail_demo"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "app/retrieval/retrieval_config.json" = "app/retrieval/retrieval_config.json"
+"gmail-demo-data" = "gmail-demo-data"
 
 [tool.pytest.ini_options]
 markers = [
     "golden: scaffold and golden-path smoke tests",
 ]
 testpaths = ["tests"]
-

@@ -1,0 +1,229 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="4550" viewBox="0 0 2400 4550" role="img" aria-labelledby="title desc">
+  <title id="title">Gmail CRE Assistant technical attack by stage</title>
+  <desc id="desc">Six product stages showing the function, exact technical build approach, and working repository components reused at each stage.</desc>
+
+  <defs>
+    <filter id="shadow" x="-8%" y="-8%" width="116%" height="125%">
+      <feDropShadow dx="0" dy="9" stdDeviation="12" flood-color="#0f172a" flood-opacity="0.10"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
+    </marker>
+    <style>
+      .title { font-family: Inter, Arial, sans-serif; font-size: 62px; font-weight: 850; fill: #0f172a; text-anchor: middle; }
+      .subtitle { font-family: Inter, Arial, sans-serif; font-size: 29px; font-weight: 500; fill: #475569; text-anchor: middle; }
+      .node-title { font-family: Inter, Arial, sans-serif; font-size: 37px; font-weight: 850; fill: #0f172a; }
+      .number { font-family: Inter, Arial, sans-serif; font-size: 31px; font-weight: 850; fill: #ffffff; text-anchor: middle; dominant-baseline: middle; }
+      .tag { font-family: Inter, Arial, sans-serif; font-size: 21px; font-weight: 850; fill: #ffffff; text-anchor: middle; dominant-baseline: middle; letter-spacing: 0.6px; }
+      .status { font-family: Inter, Arial, sans-serif; font-size: 20px; font-weight: 800; fill: #334155; text-anchor: middle; dominant-baseline: middle; }
+      .function { font-family: Inter, Arial, sans-serif; font-size: 27px; font-weight: 560; fill: #334155; }
+      .panel-title { font-family: Inter, Arial, sans-serif; font-size: 23px; font-weight: 850; fill: #0f172a; letter-spacing: 0.4px; }
+      .panel-text { font-family: Inter, Arial, sans-serif; font-size: 25px; font-weight: 520; fill: #334155; }
+      .legend { font-family: Inter, Arial, sans-serif; font-size: 22px; font-weight: 750; fill: #334155; text-anchor: middle; dominant-baseline: middle; }
+      .footer { font-family: Inter, Arial, sans-serif; font-size: 27px; font-weight: 700; fill: #334155; text-anchor: middle; }
+      .edge { fill: none; stroke: #64748b; stroke-width: 5; marker-end: url(#arrow); }
+      .loop { fill: none; stroke: #94a3b8; stroke-width: 5; stroke-dasharray: 16 13; marker-end: url(#arrow); }
+      .loop-label { font-family: Inter, Arial, sans-serif; font-size: 21px; font-weight: 800; fill: #64748b; text-anchor: middle; }
+    </style>
+  </defs>
+
+  <rect width="2400" height="4550" fill="#f8fafc"/>
+
+  <text x="1200" y="80" class="title">Gmail CRE Assistant — Technical Attack by Stage</text>
+  <text x="1200" y="132" class="subtitle">Same six functional components • exact build approach • working repo leverage at every step</text>
+
+  <rect x="455" y="170" width="430" height="52" rx="26" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <circle cx="500" cy="196" r="14" fill="#64748b"/>
+  <text x="680" y="197" class="legend">FUNCTION — what it delivers</text>
+  <rect x="920" y="170" width="420" height="52" rx="26" fill="#eff6ff" stroke="#60a5fa" stroke-width="2"/>
+  <circle cx="965" cy="196" r="14" fill="#2563eb"/>
+  <text x="1130" y="197" class="legend">BUILD — my technical attack</text>
+  <rect x="1375" y="170" width="570" height="52" rx="26" fill="#ecfdf5" stroke="#34d399" stroke-width="2"/>
+  <circle cx="1420" cy="196" r="14" fill="#059669"/>
+  <text x="1655" y="197" class="legend">REUSE — what already works here</text>
+
+  <!-- NODE 1 -->
+  <rect x="140" y="275" width="2120" height="610" rx="34" fill="#ffffff" stroke="#2563eb" stroke-width="4" filter="url(#shadow)"/>
+  <rect x="140" y="275" width="2120" height="94" rx="34" fill="#e8f2ff"/>
+  <path d="M140 335 L140 369 L2260 369 L2260 335" fill="#e8f2ff"/>
+  <circle cx="225" cy="322" r="38" fill="#2563eb"/>
+  <text x="225" y="322" class="number">1</text>
+  <text x="290" y="336" class="node-title">CRE email arrives in Gmail</text>
+  <rect x="1730" y="297" width="470" height="50" rx="25" fill="#ffffff" stroke="#93c5fd" stroke-width="2"/>
+  <text x="1965" y="323" class="status">PLUMBING EXISTS • GMAIL NEW</text>
+
+  <rect x="190" y="398" width="170" height="44" rx="22" fill="#64748b"/>
+  <text x="275" y="421" class="tag">FUNCTION</text>
+  <text x="395" y="420" class="function">Bring requirements, inquiries, listing replies, updates, and attachments</text>
+  <text x="395" y="456" class="function">into one searchable source stream.</text>
+
+  <rect x="185" y="488" width="2030" height="148" rx="22" fill="#eff6ff" stroke="#bfdbfe" stroke-width="2"/>
+  <text x="225" y="529" class="panel-title">BUILD</text>
+  <text x="355" y="529" class="panel-text">Each Gmail delivery triggers Toolhouse; search exact sender + [CRE-DEMO] subject.</text>
+  <text x="355" y="568" class="panel-text">Gmail tool → message/thread/body/attachments → our CRE ingestion MCP tool.</text>
+  <text x="355" y="607" class="panel-text">Persist Gmail message IDs/checkpoints so repeated checks create no duplicate effects.</text>
+
+  <rect x="185" y="656" width="2030" height="190" rx="22" fill="#ecfdf5" stroke="#a7f3d0" stroke-width="2"/>
+  <text x="225" y="698" class="panel-title">REUSE</text>
+  <text x="355" y="698" class="panel-text">FastAPI intake • SourceDocument + Chunk • PostgreSQL IngestionJob worker</text>
+  <text x="355" y="738" class="panel-text">Durable event/file ingestion and history-backfill patterns • file storage and dedupe</text>
+  <text x="355" y="778" class="panel-text">Existing PDF, XLSX, CSV, text, image, and optional OCR attachment parsers</text>
+  <text x="355" y="818" class="panel-text">Key seams: source importer • sample_importer.py • parsers.py • workers/</text>
+
+  <path d="M1200 885 L1200 950" class="edge"/>
+
+  <!-- NODE 2 -->
+  <rect x="140" y="965" width="2120" height="610" rx="34" fill="#ffffff" stroke="#4f46e5" stroke-width="4" filter="url(#shadow)"/>
+  <rect x="140" y="965" width="2120" height="94" rx="34" fill="#eef2ff"/>
+  <path d="M140 1025 L140 1059 L2260 1059 L2260 1025" fill="#eef2ff"/>
+  <circle cx="225" cy="1012" r="38" fill="#4f46e5"/>
+  <text x="225" y="1012" class="number">2</text>
+  <text x="290" y="1026" class="node-title">The assistant understands the email</text>
+  <rect x="1670" y="987" width="530" height="50" rx="25" fill="#ffffff" stroke="#a5b4fc" stroke-width="2"/>
+  <text x="1935" y="1013" class="status">PARSERS EXIST • EMAIL LOGIC NEW</text>
+
+  <rect x="190" y="1088" width="170" height="44" rx="22" fill="#64748b"/>
+  <text x="275" y="1111" class="tag">FUNCTION</text>
+  <text x="395" y="1110" class="function">Identify the message type, people, property, suites, requirement, corrections,</text>
+  <text x="395" y="1146" class="function">and promised follow-ups.</text>
+
+  <rect x="185" y="1178" width="2030" height="148" rx="22" fill="#eff6ff" stroke="#bfdbfe" stroke-width="2"/>
+  <text x="225" y="1219" class="panel-title">BUILD</text>
+  <text x="355" y="1219" class="panel-text">Parse the MIME tree and HTML; split authored, forwarded, quoted, signature, and footer text.</text>
+  <text x="355" y="1258" class="panel-text">Classify multiple events per message, then run typed Pydantic extractors for each event.</text>
+  <text x="355" y="1297" class="panel-text">Save normalized fields with exact source offsets, confidence, timing, and qualification.</text>
+
+  <rect x="185" y="1346" width="2030" height="190" rx="22" fill="#ecfdf5" stroke="#a7f3d0" stroke-width="2"/>
+  <text x="225" y="1388" class="panel-title">REUSE</text>
+  <text x="355" y="1388" class="panel-text">parse_source_file attachment pipeline • CRE signal/property extraction building blocks</text>
+  <text x="355" y="1428" class="panel-text">Rich PropertyRecord: suite, size, rent, OpEx, power, HVAC, parking, availability</text>
+  <text x="355" y="1468" class="panel-text">PropertyFieldValue: raw/normalized value, source span, confidence, extractor version</text>
+  <text x="355" y="1508" class="panel-text">Adapt the schema and parsers; replace the unsafe whole-email heuristic.</text>
+
+  <path d="M1200 1575 L1200 1640" class="edge"/>
+
+  <!-- NODE 3 -->
+  <rect x="140" y="1655" width="2120" height="610" rx="34" fill="#ffffff" stroke="#059669" stroke-width="4" filter="url(#shadow)"/>
+  <rect x="140" y="1655" width="2120" height="94" rx="34" fill="#ecfdf5"/>
+  <path d="M140 1715 L140 1749 L2260 1749 L2260 1715" fill="#ecfdf5"/>
+  <circle cx="225" cy="1702" r="38" fill="#059669"/>
+  <text x="225" y="1702" class="number">3</text>
+  <text x="290" y="1716" class="node-title">Organize the knowledge and choose the job</text>
+  <rect x="1615" y="1677" width="585" height="50" rx="25" fill="#ffffff" stroke="#6ee7b7" stroke-width="2"/>
+  <text x="1908" y="1703" class="status">DATABASE/ROUTER EXIST • MODELS NEW</text>
+
+  <rect x="190" y="1778" width="170" height="44" rx="22" fill="#64748b"/>
+  <text x="275" y="1801" class="tag">FUNCTION</text>
+  <text x="395" y="1800" class="function">Maintain requirements, property knowledge, and conversation work; decide whether</text>
+  <text x="395" y="1836" class="function">to match spaces, answer an inquiry, or process a change.</text>
+
+  <rect x="185" y="1868" width="2030" height="148" rx="22" fill="#eff6ff" stroke="#bfdbfe" stroke-width="2"/>
+  <text x="225" y="1909" class="panel-title">BUILD</text>
+  <text x="355" y="1909" class="panel-text">Add Message, Requirement, Constraint, Claim, Match, Response, and FollowUp models.</text>
+  <text x="355" y="1948" class="panel-text">Resolve property → building → floor → suite aliases; keep historical facts and latest-known views.</text>
+  <text x="355" y="1987" class="panel-text">Extend routing with requirement-match, inquiry-answer, change-tracking, and response intents.</text>
+
+  <rect x="185" y="2036" width="2030" height="190" rx="22" fill="#ecfdf5" stroke="#a7f3d0" stroke-width="2"/>
+  <text x="225" y="2078" class="panel-title">REUSE</text>
+  <text x="355" y="2078" class="panel-text">PostgreSQL + SQLAlchemy + six additive Alembic migrations already form the data spine</text>
+  <text x="355" y="2118" class="panel-text">Broad PropertyRecord schema • QuerySpec/query router • ThreadSession conversation context</text>
+  <text x="355" y="2158" class="panel-text">Existing duplicate, freshness, source-authority, conflict, and timeline metadata</text>
+  <text x="355" y="2198" class="panel-text">Key seams: models/core.py • query_constructor.py • query_router.py • thread_sessions.py</text>
+
+  <path d="M1200 2265 L1200 2330" class="edge"/>
+
+  <!-- NODE 4 -->
+  <rect x="140" y="2345" width="2120" height="610" rx="34" fill="#ffffff" stroke="#ea580c" stroke-width="4" filter="url(#shadow)"/>
+  <rect x="140" y="2345" width="2120" height="94" rx="34" fill="#fff7ed"/>
+  <path d="M140 2405 L140 2439 L2260 2439 L2260 2405" fill="#fff7ed"/>
+  <circle cx="225" cy="2392" r="38" fill="#ea580c"/>
+  <text x="225" y="2392" class="number">4</text>
+  <text x="290" y="2406" class="node-title">Produce broker-ready work</text>
+  <rect x="1545" y="2367" width="655" height="50" rx="25" fill="#ffffff" stroke="#fdba74" stroke-width="2"/>
+  <text x="1873" y="2393" class="status">RETRIEVAL/AGENT EXIST • MATCHER/DRAFT NEW</text>
+
+  <rect x="190" y="2468" width="170" height="44" rx="22" fill="#64748b"/>
+  <text x="275" y="2491" class="tag">FUNCTION</text>
+  <text x="395" y="2490" class="function">Return ranked spaces, fit/gap explanations, property answers, a grounded response,</text>
+  <text x="395" y="2526" class="function">and links to the exact supporting sources.</text>
+
+  <rect x="185" y="2558" width="2030" height="148" rx="22" fill="#eff6ff" stroke="#bfdbfe" stroke-width="2"/>
+  <text x="225" y="2599" class="panel-title">BUILD</text>
+  <text x="355" y="2599" class="panel-text">Filter candidates in SQL; score each requirement as FIT / NO FIT / UNKNOWN.</text>
+  <text x="355" y="2638" class="panel-text">Retrieve supporting text; render facts first; let Toolhouse improve wording from selected evidence.</text>
+  <text x="355" y="2677" class="panel-text">Persist the sent response, match reasons, missing questions, and its evidence snapshot.</text>
+
+  <rect x="185" y="2726" width="2030" height="190" rx="22" fill="#ecfdf5" stroke="#a7f3d0" stroke-width="2"/>
+  <text x="225" y="2768" class="panel-title">REUSE</text>
+  <text x="355" y="2768" class="panel-text">Structured SQL retrieval • BM25S • PolyFuzz • TF-IDF • optional Qdrant + reranker</text>
+  <text x="355" y="2808" class="panel-text">query_service route → retrieve → evidence → render → snapshot pipeline</text>
+  <text x="355" y="2848" class="panel-text">EvidenceItem + AnswerSnapshot • source receipts • comparison CSV generation</text>
+  <text x="355" y="2888" class="panel-text">Toolhouse/MCP search, rank, inventory, timeline, conflict, source, and audit tools</text>
+
+  <path d="M1200 2955 L1200 3020" class="edge"/>
+
+  <!-- NODE 5 -->
+  <rect x="140" y="3035" width="2120" height="610" rx="34" fill="#ffffff" stroke="#a21caf" stroke-width="4" filter="url(#shadow)"/>
+  <rect x="140" y="3035" width="2120" height="94" rx="34" fill="#fdf4ff"/>
+  <path d="M140 3095 L140 3129 L2260 3129 L2260 3095" fill="#fdf4ff"/>
+  <circle cx="225" cy="3082" r="38" fill="#a21caf"/>
+  <text x="225" y="3082" class="number">5</text>
+  <text x="290" y="3096" class="node-title">Toolhouse sends the Gmail reply</text>
+  <rect x="1555" y="3057" width="645" height="50" rx="25" fill="#ffffff" stroke="#e879f9" stroke-width="2"/>
+  <text x="1878" y="3083" class="status">EVIDENCE EXISTS • GMAIL/VTS ADAPTERS NEW</text>
+
+  <rect x="190" y="3158" width="170" height="44" rx="22" fill="#64748b"/>
+  <text x="275" y="3181" class="tag">FUNCTION</text>
+  <text x="395" y="3180" class="function">Verify recipient and thread, send one reply, record the outbound message and VTS activity,</text>
+  <text x="395" y="3216" class="function">and schedule the next follow-up.</text>
+
+  <rect x="185" y="3248" width="2030" height="148" rx="22" fill="#eff6ff" stroke="#bfdbfe" stroke-width="2"/>
+  <text x="225" y="3289" class="panel-title">BUILD</text>
+  <text x="355" y="3289" class="panel-text">The Toolhouse Worker checks for an existing sent reply, then sends once in the source thread.</text>
+  <text x="355" y="3328" class="panel-text">Broker reviews, edits, and sends manually in Gmail; nothing auto-sends in the demo.</text>
+  <text x="355" y="3367" class="panel-text">Later expose VTS and reminder actions as additional Toolhouse/MCP tools.</text>
+
+  <rect x="185" y="3416" width="2030" height="190" rx="22" fill="#ecfdf5" stroke="#a7f3d0" stroke-width="2"/>
+  <text x="225" y="3458" class="panel-title">REUSE</text>
+  <text x="355" y="3458" class="panel-text">EvidenceItem • AnswerSnapshot • source receipts • citation validation</text>
+  <text x="355" y="3498" class="panel-text">Background jobs with pending/failure states • Toolhouse AgentRun audit records</text>
+  <text x="355" y="3538" class="panel-text">Thread context, follow-up state, cached suggestions, and comparison CSV generation</text>
+  <text x="355" y="3578" class="panel-text">One Worker orchestrates connected Gmail, Sheets, and our custom CRE MCP tools.</text>
+
+  <path d="M1200 3645 L1200 3710" class="edge"/>
+
+  <!-- NODE 6 -->
+  <rect x="140" y="3725" width="2120" height="610" rx="34" fill="#ffffff" stroke="#2563eb" stroke-width="4" filter="url(#shadow)"/>
+  <rect x="140" y="3725" width="2120" height="94" rx="34" fill="#e8f2ff"/>
+  <path d="M140 3785 L140 3819 L2260 3819 L2260 3785" fill="#e8f2ff"/>
+  <circle cx="225" cy="3772" r="38" fill="#2563eb"/>
+  <text x="225" y="3772" class="number">6</text>
+  <text x="290" y="3786" class="node-title">New replies improve the picture</text>
+  <rect x="1545" y="3747" width="655" height="50" rx="25" fill="#ffffff" stroke="#93c5fd" stroke-width="2"/>
+  <text x="1873" y="3773" class="status">UPDATE LOOP EXISTS • TEMPORAL LOGIC NEW</text>
+
+  <rect x="190" y="3848" width="170" height="44" rx="22" fill="#64748b"/>
+  <text x="275" y="3871" class="tag">FUNCTION</text>
+  <text x="395" y="3870" class="function">Absorb replies, corrections, availability changes, and completed follow-ups so the</text>
+  <text x="395" y="3906" class="function">next match or answer uses the latest known information.</text>
+
+  <rect x="185" y="3938" width="2030" height="148" rx="22" fill="#eff6ff" stroke="#bfdbfe" stroke-width="2"/>
+  <text x="225" y="3979" class="panel-title">BUILD</text>
+  <text x="355" y="3979" class="panel-text">Scheduled Toolhouse Worker uses its Gmail tool to find later replies and changes.</text>
+  <text x="355" y="4018" class="panel-text">It calls the CRE MCP; add time-stamped claims and supersede instead of overwriting.</text>
+  <text x="355" y="4057" class="panel-text">Refresh current views, matches, indexes, follow-ups, and sent-reply state.</text>
+
+  <rect x="185" y="4106" width="2030" height="190" rx="22" fill="#ecfdf5" stroke="#a7f3d0" stroke-width="2"/>
+  <text x="225" y="4148" class="panel-title">REUSE</text>
+  <text x="355" y="4148" class="panel-text">Continuous message/file ingestion and bounded history-backfill patterns</text>
+  <text x="355" y="4188" class="panel-text">Event dedupe • durable job checkpoints • conversation history and follow-up state</text>
+  <text x="355" y="4228" class="panel-text">Freshness/authority scores • timeline/conflict tools • Qdrant reindex pipeline</text>
+  <text x="355" y="4268" class="panel-text">Add Toolhouse run checkpoints plus the claim-resolution/current-view compiler.</text>
+
+  <!-- Learning loop -->
+  <path d="M2260 4030 L2340 4030 L2340 580 L2285 580" class="loop"/>
+  <text x="2310" y="2310" transform="rotate(-90 2310 2310)" class="loop-label">NEXT EMAIL • CORRECTION • STATUS UPDATE</text>
+
+  <rect x="335" y="4390" width="1730" height="82" rx="41" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="1200" y="4442" class="footer">Focused pivot: new Gmail + email/requirement logic on top of the working CRE evidence engine.</text>
+</svg>

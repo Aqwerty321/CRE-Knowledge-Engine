@@ -4,6 +4,7 @@
 
 # Python runtime artifacts
 /.env
+/.env.gmail-demo
 /.venv/
 __pycache__/
 *.py[cod]

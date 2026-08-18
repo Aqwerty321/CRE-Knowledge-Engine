@@ -1,0 +1,204 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2600" height="3800" viewBox="0 0 2600 3800" role="img" aria-labelledby="title desc">
+  <title id="title">Gmail CRE demo: existing stack versus my build</title>
+  <desc id="desc">Five execution steps compare the reusable repository with the implemented live Gmail demo.</desc>
+
+  <defs>
+    <filter id="shadow" x="-8%" y="-8%" width="116%" height="128%">
+      <feDropShadow dx="0" dy="9" stdDeviation="12" flood-color="#0f172a" flood-opacity="0.10"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
+    </marker>
+    <style>
+      .title { font-family: Inter, Arial, sans-serif; font-size: 64px; font-weight: 850; fill: #0f172a; text-anchor: middle; }
+      .subtitle { font-family: Inter, Arial, sans-serif; font-size: 29px; font-weight: 520; fill: #475569; text-anchor: middle; }
+      .headline { font-family: Inter, Arial, sans-serif; font-size: 30px; font-weight: 850; fill: #166534; text-anchor: middle; dominant-baseline: middle; }
+      .metric { font-family: Inter, Arial, sans-serif; font-size: 21px; font-weight: 750; fill: #334155; text-anchor: middle; dominant-baseline: middle; }
+      .node-title { font-family: Inter, Arial, sans-serif; font-size: 34px; font-weight: 850; fill: #0f172a; }
+      .number { font-family: Inter, Arial, sans-serif; font-size: 30px; font-weight: 850; fill: #ffffff; text-anchor: middle; dominant-baseline: middle; }
+      .status { font-family: Inter, Arial, sans-serif; font-size: 21px; font-weight: 850; text-anchor: middle; dominant-baseline: middle; letter-spacing: 0.5px; }
+      .col-title { font-family: Inter, Arial, sans-serif; font-size: 22px; font-weight: 850; fill: #0f172a; letter-spacing: 0.6px; }
+      .body { font-family: Inter, Arial, sans-serif; font-size: 23px; font-weight: 520; fill: #334155; }
+      .status-title { font-family: Inter, Arial, sans-serif; font-size: 37px; font-weight: 850; fill: #0f172a; }
+      .bar-title { font-family: Inter, Arial, sans-serif; font-size: 26px; font-weight: 800; fill: #0f172a; }
+      .bar-value { font-family: Inter, Arial, sans-serif; font-size: 25px; font-weight: 850; fill: #ffffff; text-anchor: middle; dominant-baseline: middle; }
+      .note { font-family: Inter, Arial, sans-serif; font-size: 23px; font-weight: 520; fill: #475569; }
+      .sequence-title { font-family: Inter, Arial, sans-serif; font-size: 25px; font-weight: 850; fill: #0f172a; }
+      .sequence { font-family: Inter, Arial, sans-serif; font-size: 22px; font-weight: 650; fill: #334155; text-anchor: middle; }
+      .edge { fill: none; stroke: #64748b; stroke-width: 5; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="2600" height="3800" fill="#f8fafc"/>
+
+  <text x="1300" y="82" class="title">Gmail CRE Demo — Existing Stack vs My Build</text>
+  <text x="1300" y="136" class="subtitle">CTO briefing: what exists now and the exact live Gmail demo path</text>
+
+  <rect x="470" y="180" width="1660" height="72" rx="36" fill="#dcfce7" stroke="#16a34a" stroke-width="3"/>
+  <text x="1300" y="218" class="headline">NARROW LIVE DEMO IMPLEMENTED • CONNECTORS + REHEARSAL REMAIN</text>
+
+  <rect x="220" y="280" width="420" height="54" rx="27" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="430" y="308" class="metric">2,425 seeded property rows</text>
+  <rect x="680" y="280" width="360" height="54" rx="27" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="860" y="308" class="metric">27 existing sources</text>
+  <rect x="1080" y="280" width="440" height="54" rx="27" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="1300" y="308" class="metric">PDF • XLSX • CSV • OCR</text>
+  <rect x="1560" y="280" width="380" height="54" rx="27" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="1750" y="308" class="metric">Postgres + Qdrant</text>
+  <rect x="1980" y="280" width="400" height="54" rx="27" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="2180" y="308" class="metric">Toolhouse + source audit</text>
+
+  <!-- STEP 0 -->
+  <rect x="140" y="390" width="2320" height="430" rx="32" fill="#ffffff" stroke="#16a34a" stroke-width="4" filter="url(#shadow)"/>
+  <rect x="140" y="390" width="2320" height="78" rx="32" fill="#dcfce7"/>
+  <path d="M140 438 L140 468 L2460 468 L2460 438" fill="#dcfce7"/>
+  <circle cx="215" cy="429" r="34" fill="#16a34a"/>
+  <text x="215" y="429" class="number">0</text>
+  <text x="275" y="441" class="node-title">30 property records</text>
+  <rect x="2070" y="404" width="330" height="50" rx="25" fill="#ffffff" stroke="#86efac" stroke-width="2"/>
+  <text x="2235" y="430" class="status" fill="#166534">REUSE NOW</text>
+
+  <rect x="180" y="495" width="1080" height="285" rx="22" fill="#ecfdf5" stroke="#a7f3d0" stroke-width="2"/>
+  <text x="220" y="538" class="col-title">WHAT ALREADY WORKS</text>
+  <text x="220" y="586" class="body">Deterministic generator + 2,425 CRE rows.</text>
+  <text x="220" y="625" class="body">Suite, size, rent, dates, power, HVAC, parking,</text>
+  <text x="220" y="664" class="body">and location are queryable and source-linked.</text>
+  <text x="220" y="703" class="body">No new generator or database is needed.</text>
+
+  <rect x="1290" y="495" width="1130" height="285" rx="22" fill="#eff6ff" stroke="#bfdbfe" stroke-width="2"/>
+  <text x="1330" y="538" class="col-title">WHAT IS IMPLEMENTED</text>
+  <text x="1330" y="586" class="body">30 typed Austin scenario properties.</text>
+  <text x="1330" y="625" class="body">Frozen winners, near matches, exclusions,</text>
+  <text x="1330" y="664" class="body">and focused regression tests.</text>
+
+  <path d="M1300 820 L1300 870" class="edge"/>
+
+  <!-- STEP 1 -->
+  <rect x="140" y="885" width="2320" height="430" rx="32" fill="#ffffff" stroke="#2563eb" stroke-width="4" filter="url(#shadow)"/>
+  <rect x="140" y="885" width="2320" height="78" rx="32" fill="#dbeafe"/>
+  <path d="M140 933 L140 963 L2460 963 L2460 933" fill="#dbeafe"/>
+  <circle cx="215" cy="924" r="34" fill="#2563eb"/>
+  <text x="215" y="924" class="number">1</text>
+  <text x="275" y="936" class="node-title">Google Sheet property list</text>
+  <rect x="1980" y="899" width="420" height="50" rx="25" fill="#ffffff" stroke="#93c5fd" stroke-width="2"/>
+  <text x="2190" y="925" class="status" fill="#1d4ed8">ADAPT • DON’T REBUILD</text>
+
+  <rect x="180" y="990" width="1080" height="285" rx="22" fill="#ecfdf5" stroke="#a7f3d0" stroke-width="2"/>
+  <text x="220" y="1033" class="col-title">WHAT ALREADY WORKS</text>
+  <text x="220" y="1081" class="body">CSV/XLSX/PDF → importer → PostgreSQL.</text>
+  <text x="220" y="1120" class="body">Facts retain source file, row/page, raw value,</text>
+  <text x="220" y="1159" class="body">normalized value, and extraction metadata.</text>
+  <text x="220" y="1198" class="body">Structured and hybrid search already use it.</text>
+
+  <rect x="1290" y="990" width="1130" height="285" rx="22" fill="#eff6ff" stroke="#bfdbfe" stroke-width="2"/>
+  <text x="1330" y="1033" class="col-title">WHAT IS IMPLEMENTED</text>
+  <text x="1330" y="1081" class="body">Six-tool MCP returns the Sheet contract.</text>
+  <text x="1330" y="1120" class="body">Empty Sheet auto-seeds all 30 CRE rows.</text>
+  <text x="1330" y="1159" class="body">ProcessedEmails stores Gmail IDs and results.</text>
+  <text x="1330" y="1198" class="body">Toolhouse only needs the Sheets connection.</text>
+
+  <path d="M1300 1315 L1300 1365" class="edge"/>
+
+  <!-- STEP 2 -->
+  <rect x="140" y="1380" width="2320" height="430" rx="32" fill="#ffffff" stroke="#ea580c" stroke-width="4" filter="url(#shadow)"/>
+  <rect x="140" y="1380" width="2320" height="78" rx="32" fill="#ffedd5"/>
+  <path d="M140 1428 L140 1458 L2460 1458 L2460 1428" fill="#ffedd5"/>
+  <circle cx="215" cy="1419" r="34" fill="#ea580c"/>
+  <text x="215" y="1419" class="number">2</text>
+  <text x="275" y="1431" class="node-title">Ten real Gmail test messages</text>
+  <rect x="1940" y="1394" width="460" height="50" rx="25" fill="#ffffff" stroke="#fdba74" stroke-width="2"/>
+  <text x="2170" y="1420" class="status" fill="#c2410c">CREATE THEM IN GMAIL</text>
+
+  <rect x="180" y="1485" width="1080" height="285" rx="22" fill="#ecfdf5" stroke="#a7f3d0" stroke-width="2"/>
+  <text x="220" y="1528" class="col-title">WHAT ALREADY WORKS</text>
+  <text x="220" y="1576" class="body">SourceDocument + Chunk records.</text>
+  <text x="220" y="1615" class="body">Durable jobs, dedupe, file storage, backfill,</text>
+  <text x="220" y="1654" class="body">and PDF/XLSX/CSV/text/OCR parsers.</text>
+  <text x="220" y="1693" class="body">The generic ingestion skeleton is present.</text>
+
+  <rect x="1290" y="1485" width="1130" height="285" rx="22" fill="#fff7ed" stroke="#fdba74" stroke-width="2"/>
+  <text x="1330" y="1528" class="col-title">WHAT IS IMPLEMENTED</text>
+  <text x="1330" y="1576" class="body">Use real sender + [CRE-DEMO] subjects — no label.</text>
+  <text x="1330" y="1615" class="body">Send 8 listing/update emails, 1 correction,</text>
+  <text x="1330" y="1654" class="body">and 1 tenant requirement from secondary Gmail.</text>
+  <text x="1330" y="1693" class="body">These become the live demo and regression cases.</text>
+
+  <path d="M1300 1810 L1300 1860" class="edge"/>
+
+  <!-- STEP 3 -->
+  <rect x="140" y="1875" width="2320" height="430" rx="32" fill="#ffffff" stroke="#16a34a" stroke-width="4" filter="url(#shadow)"/>
+  <rect x="140" y="1875" width="2320" height="78" rx="32" fill="#dcfce7"/>
+  <path d="M140 1923 L140 1953 L2460 1953 L2460 1923" fill="#dcfce7"/>
+  <circle cx="215" cy="1914" r="34" fill="#16a34a"/>
+  <text x="215" y="1914" class="number">3</text>
+  <text x="275" y="1926" class="node-title">Toolhouse runs Gmail → CRE logic → Sheet</text>
+  <rect x="1920" y="1889" width="480" height="50" rx="25" fill="#ffffff" stroke="#86efac" stroke-width="2"/>
+  <text x="2160" y="1915" class="status" fill="#166534">WIRE THE LIVE DEMO</text>
+
+  <rect x="180" y="1980" width="1080" height="285" rx="22" fill="#ecfdf5" stroke="#a7f3d0" stroke-width="2"/>
+  <text x="220" y="2023" class="col-title">WHAT ALREADY WORKS</text>
+  <text x="220" y="2071" class="body">Toolhouse Workers client + custom MCP server.</text>
+  <text x="220" y="2110" class="body">Tools search, rank, summarize, inspect timelines</text>
+  <text x="220" y="2149" class="body">and conflicts, fetch sources, and audit data.</text>
+  <text x="220" y="2188" class="body">Responses are checked against evidence IDs.</text>
+
+  <rect x="1290" y="1980" width="1130" height="285" rx="22" fill="#eff6ff" stroke="#bfdbfe" stroke-width="2"/>
+  <text x="1330" y="2023" class="col-title">IMPLEMENTED / CONNECT NEXT</text>
+  <text x="1330" y="2071" class="body">Connect Gmail + Sheets to one Toolhouse Worker.</text>
+  <text x="1330" y="2110" class="body">Trigger one Toolhouse Agent Run after each delivery.</text>
+  <text x="1330" y="2149" class="body">Call our CRE MCP, update the correct Sheet row,</text>
+  <text x="1330" y="2188" class="body">run matching, and send one Gmail reply.</text>
+
+  <path d="M1300 2305 L1300 2355" class="edge"/>
+
+  <!-- STEP 4 -->
+  <rect x="140" y="2370" width="2320" height="470" rx="32" fill="#ffffff" stroke="#ea580c" stroke-width="4" filter="url(#shadow)"/>
+  <rect x="140" y="2370" width="2320" height="78" rx="32" fill="#ffedd5"/>
+  <path d="M140 2418 L140 2448 L2460 2448 L2460 2418" fill="#ffedd5"/>
+  <circle cx="215" cy="2409" r="34" fill="#ea580c"/>
+  <text x="215" y="2409" class="number">4</text>
+  <text x="275" y="2421" class="node-title">Email → match → sent Gmail reply</text>
+  <rect x="1960" y="2384" width="440" height="50" rx="25" fill="#ffffff" stroke="#fdba74" stroke-width="2"/>
+  <text x="2180" y="2410" class="status" fill="#c2410c">MAIN NEW LOGIC</text>
+
+  <rect x="180" y="2475" width="1080" height="325" rx="22" fill="#ecfdf5" stroke="#a7f3d0" stroke-width="2"/>
+  <text x="220" y="2518" class="col-title">WHAT ALREADY WORKS</text>
+  <text x="220" y="2566" class="body">Structured + hybrid property retrieval.</text>
+  <text x="220" y="2605" class="body">EvidenceItem + AnswerSnapshot + source receipts.</text>
+  <text x="220" y="2644" class="body">Toolhouse wording pass + citation validation.</text>
+  <text x="220" y="2683" class="body">Durable jobs, audit records, and follow-up state.</text>
+
+  <rect x="1290" y="2475" width="1130" height="325" rx="22" fill="#fff7ed" stroke="#fdba74" stroke-width="2"/>
+  <text x="1330" y="2518" class="col-title">WHAT IS IMPLEMENTED</text>
+  <text x="1330" y="2566" class="body">Typed listing and requirement validation.</text>
+  <text x="1330" y="2605" class="body">Deterministic FIT / NO FIT / UNKNOWN matcher.</text>
+  <text x="1330" y="2644" class="body">Grounded response → authorized Gmail send.</text>
+  <text x="1330" y="2693" class="body">Message-ID dedupe and footer-ignore prompt.</text>
+  <text x="1330" y="2732" class="body">12 focused tests; 34 with Toolhouse regressions.</text>
+
+  <!-- Honest status -->
+  <rect x="140" y="2910" width="2320" height="670" rx="34" fill="#ffffff" stroke="#cbd5e1" stroke-width="3" filter="url(#shadow)"/>
+  <text x="220" y="2970" class="status-title">Honest status after mapping the repo</text>
+
+  <text x="220" y="3035" class="bar-title">Reusable platform underneath the pivot</text>
+  <rect x="220" y="3060" width="980" height="54" rx="27" fill="#e2e8f0"/>
+  <rect x="220" y="3060" width="570" height="54" rx="27" fill="#16a34a"/>
+  <text x="505" y="3088" class="bar-value">≈ 55–60% PRESENT</text>
+  <text x="1240" y="3095" class="note">Storage, jobs, parsers, data, search, evidence, Toolhouse, source audit</text>
+
+  <text x="220" y="3180" class="bar-title">Gmail-specific vertical slice</text>
+  <rect x="220" y="3205" width="980" height="54" rx="27" fill="#e2e8f0"/>
+  <rect x="220" y="3205" width="860" height="54" rx="27" fill="#16a34a"/>
+  <text x="650" y="3233" class="bar-value">≈ 85–90% DEMO READY</text>
+  <text x="1240" y="3240" class="note">Code path built; live connector credentials and one rehearsal remain</text>
+
+  <rect x="220" y="3295" width="2160" height="90" rx="24" fill="#f8fafc" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="1300" y="3332" class="sequence-title" text-anchor="middle">EXACT NEXT DEMO SEQUENCE</text>
+  <text x="1300" y="3371" class="sequence">real Gmail → Agent Run → auto-seed / update Sheet → match → sent Gmail reply</text>
+
+  <rect x="220" y="3425" width="2160" height="105" rx="24" fill="#fff7ed" stroke="#fdba74" stroke-width="2"/>
+  <text x="1300" y="3465" class="sequence-title" text-anchor="middle">TIMELINE CLARITY</text>
+  <text x="1300" y="3505" class="sequence">Connect three tools, add credentials, smoke-test one email, then run the live ten-message loop.</text>
+
+  <text x="1300" y="3670" class="subtitle">Bottom line: the narrow Gmail demo is built; production mailbox RAG remains the larger pivot.</text>
+</svg>

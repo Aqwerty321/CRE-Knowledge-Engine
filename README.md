@@ -1,5 +1,7 @@
 # CRE Knowledge Engine
 
+> **August 2026 direction:** the original runtime described below remains intact. A separate, deliberately minimal Gmail demo is now implemented in [`gmail_demo/`](gmail_demo/) and can be merged with the larger engine later. Its demo database is Google Sheets; Toolhouse owns Gmail/Sheets orchestration; the standalone MCP backend owns automatic seed data, validation, matching, and a grounded reply contract locked to the two test accounts. A live sender delivers ten real `[CRE-DEMO]` emails from the secondary Gmail to the primary inbox, triggers a Toolhouse Agent Run after each arrival, and the final requirement receives one automatic reply. Start with the [Gmail demo runbook](docs/gmail-demo-runbook.md), [exact Toolhouse prompt](docs/toolhouse-gmail-demo-agent-prompt.md), and [synthetic demo inputs](gmail-demo-data/). The [full roadmap](docs/gmail-rag-pivot-roadmap.md) remains the post-demo product plan.
+
 CRE Knowledge Engine is a Slack-native evidence layer for commercial real estate teams. It turns the material brokers already work from - listing flyers, rent rolls, spreadsheets, tour notes, Slack corrections, tenant briefs, and market notes - into sourced answers without asking the team to leave Slack or trust a black box.
 
 The system is built around a simple promise: every useful answer should trace back to evidence. A broker can ask about availability, rent, location, loading access, cap rates, conflicts, tenant fit, or broad inventory, and the app records the route, filters, evidence IDs, source rows/pages/messages, answer snapshot, and replay payload behind the Slack reply. Dense comparisons stay structured in the backend and arrive as CSV files in-thread instead of brittle markdown tables.
@@ -31,7 +33,7 @@ Current verification:
 - `uv run cre-cli demo-dry-run --live-toolhouse` passes the recording query sequence and returns replay commands for each answer.
 - Two live Slack-visible Toolhouse runs used the new MCP coordinator tools (`summarize_inventory`, `rank_properties`, and `find_property_conflicts`) with backend validation and no fallback.
 - Live Slack CSV verification on 2026-05-21 confirmed that both an instant answer and a `Look deeper` Toolhouse review upload `Quick comparison CSV` files into the same Slack thread.
-- A fresh Graphify rebuild on 2026-05-21 reports 1050 nodes, 1967 edges, and 65 communities after the repo overlay.
+- The checked-in Graphify artifact contains 1,051 nodes, 1,968 edges, and 65 communities; its filtered report renders 1,050 nodes and 1,967 edges. It predates the Gmail pivot documents and should be rebuilt when implementation begins.
 - `uv run cre-cli secret-scan` scans source, docs, config, and sample files with 0 findings.
 
 ## Architecture
