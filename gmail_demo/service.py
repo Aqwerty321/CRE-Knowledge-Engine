@@ -65,8 +65,8 @@ PROCESSED_EMAIL_COLUMNS = [
 ]
 
 DEMO_DATA_DIR = Path(__file__).resolve().parents[1] / "gmail-demo-data"
-DEMO_PRIMARY_EMAIL = "aaditya@toolhouse.ai"
-DEMO_APPROVED_SENDER = "aadityasoni2020@gmail.com"
+DEMO_PRIMARY_EMAIL = "operator@example.com"
+DEMO_APPROVED_SENDER = "requester@example.com"
 DEMO_SUBJECT_PREFIX = "[CRE-DEMO]"
 
 _CRE_QUERY_ALIASES: dict[str, tuple[str, ...]] = {
@@ -143,8 +143,8 @@ def describe_demo_contract() -> dict[str, Any]:
             "Delete only after property_id or property_name + suite resolves to exactly one current row.",
             "Never treat UNKNOWN as a match.",
             "Use returned evidence IDs and snippets for property facts; do not answer from agent memory.",
-            "Send a reply only for a [CRE-DEMO] thread received from aadityasoni2020@gmail.com.",
-            "The only authorized outbound recipient is aadityasoni2020@gmail.com.",
+            "Send a reply only for a [CRE-DEMO] thread received from requester@example.com.",
+            "The only authorized outbound recipient is requester@example.com.",
             "Record every handled Gmail message in ProcessedEmails.",
         ],
     }

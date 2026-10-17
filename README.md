@@ -151,3 +151,7 @@ scripts/          recover-demo-stack.sh for restarting the local demo stack
 ## Limitations and next steps
 
 This is a prototype run against a single Slack workspace. The sample corpus is synthetic: the generated shards are tagged as demo data, not scraped listings. Field extraction is heuristic. Natural next steps are OAuth and multi-workspace permissions, admin review for low-confidence extraction, object storage for files, telemetry, external geocoding and drive-time search, retrieval benchmarks, and retention and deletion workflows for Slack data.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

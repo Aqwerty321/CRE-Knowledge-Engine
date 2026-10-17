@@ -6,8 +6,8 @@ Date: 2026-08-17
 
 The controlled live path used:
 
-- sender: `aadityasoni2020@gmail.com`
-- monitored/replying inbox: `aaditya@toolhouse.ai`
+- sender: `requester@example.com`
+- monitored/replying inbox: `operator@example.com`
 - Toolhouse Worker with Gmail, Google Sheets, and the custom Gmail CRE Demo MCP
 - Google Sheets as the current property database
 - one fresh, exact-subject Toolhouse run per test message

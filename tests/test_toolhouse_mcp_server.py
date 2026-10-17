@@ -74,13 +74,13 @@ def test_mounted_mcp_app_initializes_session_manager(monkeypatch) -> None:
 
 def test_mounted_mcp_app_allows_configured_public_host(monkeypatch) -> None:
     monkeypatch.setenv("CRE_TOOLHOUSE_MCP_BEARER_TOKEN", "secret-token")
-    monkeypatch.setenv("CLOUDFLARE_PUBLIC_CALLBACK_URL", "https://slack.aqwerty321.me")
+    monkeypatch.setenv("CLOUDFLARE_PUBLIC_CALLBACK_URL", "https://slack.example.com")
     get_settings.cache_clear()
 
     with TestClient(create_app()) as client:
         response = client.post(
             "/toolhouse/mcp?mcp_token=secret-token",
-            headers={"host": "slack.aqwerty321.me"},
+            headers={"host": "slack.example.com"},
             json={},
         )
 

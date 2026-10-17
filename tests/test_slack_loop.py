@@ -461,7 +461,7 @@ def _force_agent_command_body(query_text: str = "where is this located and what 
             "channel_id": "C_CRE_LISTINGS_DEMO",
             "channel_name": "cre-listings",
             "user_id": "U_REQUESTOR",
-            "user_name": "aadityasoni2020",
+            "user_name": "demo-user",
             "command": "/force-agent",
             "text": query_text,
             "api_app_id": "A_CRE_DEMO",

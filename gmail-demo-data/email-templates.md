@@ -1,6 +1,6 @@
 # Ten Gmail messages for the live demo
 
-The live seeder sends these as real messages from `aadityasoni2020@gmail.com` to the connected `aaditya@toolhouse.ai` inbox. Every subject has a `[CRE-DEMO]` prefix, so the Toolhouse Worker can find the messages with a Gmail query and no label or filter. The first eight are listing updates, the ninth corrects an earlier fact, and the tenth is the tenant requirement that should receive one automatic reply.
+The live seeder sends these as real messages from `requester@example.com` to the connected `operator@example.com` inbox. Every subject has a `[CRE-DEMO]` prefix, so the Toolhouse Worker can find the messages with a Gmail query and no label or filter. The first eight are listing updates, the ninth corrects an earlier fact, and the tenth is the tenant requirement that should receive one automatic reply.
 
 Do not send all ten at once. Send one, wait for the Toolhouse Worker to process it, and confirm its `gmail_message_id` appears in the `ProcessedEmails` worksheet before sending the next.
 

@@ -1,6 +1,6 @@
 # Gmail CRE demo data
 
-The Toolhouse Worker seeds `properties.csv` into an empty `Properties` worksheet by calling the demo MCP's `get_seed_properties` tool. The live CLI parses `email-templates.md` and sends the ten messages from `aadityasoni2020@gmail.com` to `aaditya@toolhouse.ai`; no `.eml` export or fake inbox import is involved. See [`docs/gmail-demo-runbook.md`](../docs/gmail-demo-runbook.md).
+The Toolhouse Worker seeds `properties.csv` into an empty `Properties` worksheet by calling the demo MCP's `get_seed_properties` tool. The live CLI parses `email-templates.md` and sends the ten messages from `requester@example.com` to `operator@example.com`; no `.eml` export or fake inbox import is involved. See [`docs/gmail-demo-runbook.md`](../docs/gmail-demo-runbook.md).
 
 This directory contains only synthetic demo inputs:
 

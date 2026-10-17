@@ -36,7 +36,7 @@ Always call validate_requirement_event, then match_requirement, then compose_req
 Use search_property_knowledge and then compose_property_query_reply for ad hoc property questions. Search uses BM25 lexical retrieval and exact CRE aliases; it does not use embeddings or a reranker.
 Use gmail_message_id as the idempotency key in the ProcessedEmails worksheet.
 Ignore signatures, disclaimers, quoted history, unsubscribe text, and tracking content during extraction.
-UNKNOWN is not FIT. An automatic reply is authorized only when compose_requirement_reply returns ok=true and send_automatically=true. The authorized demo recipient is aadityasoni2020@gmail.com in the original [CRE-DEMO] thread.
+UNKNOWN is not FIT. An automatic reply is authorized only when compose_requirement_reply returns ok=true and send_automatically=true. The authorized demo recipient is requester@example.com in the original [CRE-DEMO] thread.
 """.strip()
 
 

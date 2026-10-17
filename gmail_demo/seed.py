@@ -18,8 +18,8 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 
-DEFAULT_PRIMARY_EMAIL = "aaditya@toolhouse.ai"
-DEFAULT_SECONDARY_EMAIL = "aadityasoni2020@gmail.com"
+DEFAULT_PRIMARY_EMAIL = "operator@example.com"
+DEFAULT_SECONDARY_EMAIL = "requester@example.com"
 DEFAULT_INTERVAL_SECONDS = 45.0
 DEFAULT_TOOLHOUSE_POLL_INTERVAL_SECONDS = 12.0
 DEMO_DATA_DIR = Path(__file__).resolve().parents[1] / "gmail-demo-data"

@@ -10,7 +10,7 @@ flowchart TB
 
     O1["1. GOOGLE SHEET PROPERTY LIST<br/><br/><b>What already works</b> — CSV/XLSX/PDF import into PostgreSQL with source, row/page, and field provenance.<br/><br/><b>What I built</b> — a six-tool standalone MCP returns the exact Sheet contract and automatically seeds 30 typed Austin property rows into an empty Sheet."]
 
-    O2["2. TEN REAL GMAIL TEST MESSAGES<br/><br/><b>What already works</b> — source records, chunks, durable jobs, dedupe, file storage, and PDF/XLSX/CSV/text/OCR attachment parsers.<br/><br/><b>What I built</b> — an authenticated Gmail sender delivers eight listings, one correction, and one requirement from aadityasoni2020@gmail.com to aaditya@toolhouse.ai with a searchable subject prefix."]
+    O2["2. TEN REAL GMAIL TEST MESSAGES<br/><br/><b>What already works</b> — source records, chunks, durable jobs, dedupe, file storage, and PDF/XLSX/CSV/text/OCR attachment parsers.<br/><br/><b>What I built</b> — an authenticated Gmail sender delivers eight listings, one correction, and one requirement from requester@example.com to operator@example.com with a searchable subject prefix."]
 
     O3["3. TOOLHOUSE RUNS THE LIVE WORKFLOW<br/><br/><b>What already works</b> — Toolhouse Workers client plus MCP tools for property search, ranking, summaries, timelines, conflicts, sources, and citation validation.<br/><br/><b>What I built</b> — after every real Gmail delivery the sender starts an immediate Toolhouse Agent Run and waits for completion; the Worker reads Gmail, calls our MCP, updates Sheets, matches, and sends."]
 

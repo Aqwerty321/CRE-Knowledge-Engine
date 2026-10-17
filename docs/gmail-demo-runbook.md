@@ -44,8 +44,8 @@ Fill these values in that file:
 
 | Variable | What to enter |
 | --- | --- |
-| `GMAIL_DEMO_PRIMARY_EMAIL` | Keep `aaditya@toolhouse.ai` |
-| `GMAIL_DEMO_SECONDARY_EMAIL` | Keep `aadityasoni2020@gmail.com` |
+| `GMAIL_DEMO_PRIMARY_EMAIL` | Keep `operator@example.com` |
+| `GMAIL_DEMO_SECONDARY_EMAIL` | Keep `requester@example.com` |
 | `GMAIL_DEMO_MCP_TOKEN` | Output of `openssl rand -hex 24` |
 | `GMAIL_DEMO_PUBLIC_URL` | The Cloudflare public HTTPS origin, without `/toolhouse/mcp` |
 | `GMAIL_DEMO_SECONDARY_APP_PASSWORD` | The secondary Gmail's 16-character Google App Password |
@@ -64,8 +64,8 @@ Do not continue until it prints `Gmail demo environment is ready`.
 
 This workstation already has a dedicated named tunnel configured:
 
-- public origin: `https://gmail-cre.aqwerty321.me`
-- ingress: `gmail-cre.aqwerty321.me` → `http://127.0.0.1:8030`
+- public origin: `https://gmail-cre.example.com`
+- ingress: `gmail-cre.example.com` → `http://127.0.0.1:8030`
 - tunnel config: `~/.cloudflared/gmail-cre-demo.yml`
 - persistent services: `gmail-cre-demo-backend.service` and `gmail-cre-demo-tunnel.service`
 
@@ -91,7 +91,7 @@ Expected response:
 The Toolhouse MCP URL is:
 
 ```text
-https://gmail-cre.aqwerty321.me/toolhouse/mcp?token=VALUE_OF_GMAIL_DEMO_MCP_TOKEN
+https://gmail-cre.example.com/toolhouse/mcp?token=VALUE_OF_GMAIL_DEMO_MCP_TOKEN
 ```
 
 Do not paste the token into screenshots, chat, or committed files. For a fresh machine without these services, the backend can still be started manually with `uv run --env-file .env.gmail-demo python -m gmail_demo`.
@@ -110,7 +110,7 @@ Connect the receiving demo inbox. Enable tools that can:
 - inspect replies already sent in a thread;
 - send a reply in an existing thread.
 
-The Worker prompt restricts sending to one reply addressed to `aadityasoni2020@gmail.com` for an eligible `[CRE-DEMO]` requirement. Do not connect any production or customer inbox for this demo.
+The Worker prompt restricts sending to one reply addressed to `requester@example.com` for an eligible `[CRE-DEMO]` requirement. Do not connect any production or customer inbox for this demo.
 
 ### Google Sheets
 
@@ -139,11 +139,11 @@ Toolhouse Scheduled Runs currently have a ten-minute minimum cadence, so this de
 
 ## 5. Exact account topology
 
-- **Primary monitored inbox:** `aaditya@toolhouse.ai`
-- **Secondary live sender:** `aadityasoni2020@gmail.com`
-- **Toolhouse Gmail connection:** connect only `aaditya@toolhouse.ai`
-- **Worker query:** `from:aadityasoni2020@gmail.com subject:"[CRE-DEMO]"`
-- **Reply result:** sent from `aaditya@toolhouse.ai`, inside the final requirement thread, to `aadityasoni2020@gmail.com`
+- **Primary monitored inbox:** `operator@example.com`
+- **Secondary live sender:** `requester@example.com`
+- **Toolhouse Gmail connection:** connect only `operator@example.com`
+- **Worker query:** `from:requester@example.com subject:"[CRE-DEMO]"`
+- **Reply result:** sent from `operator@example.com`, inside the final requirement thread, to `requester@example.com`
 
 No Gmail label, Gmail filter, Slack connection, Zapier connection, `.eml` import, or connection to the secondary inbox is required.
 
@@ -193,7 +193,7 @@ Expected progression:
 Keep these four screens open:
 
 1. The initially empty `Properties` worksheet, then the automatic jump to 30 rows.
-2. `aaditya@toolhouse.ai` receiving `[CRE-DEMO]` messages in real time.
+2. `operator@example.com` receiving `[CRE-DEMO]` messages in real time.
 3. The Toolhouse run log showing Gmail read → CRE MCP validation/matching → Sheet update.
 4. The final requirement thread showing the ranked-property reply sent automatically from the primary account.
 

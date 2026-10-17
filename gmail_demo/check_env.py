@@ -25,10 +25,10 @@ def validate_environment(environ: Mapping[str, str]) -> list[str]:
         if not value or "CHANGE_ME" in value.upper():
             errors.append(f"{key}: missing or still contains CHANGE_ME")
 
-    if values["GMAIL_DEMO_PRIMARY_EMAIL"] not in {"", "aaditya@toolhouse.ai"}:
-        errors.append("GMAIL_DEMO_PRIMARY_EMAIL: must be aaditya@toolhouse.ai for this demo")
-    if values["GMAIL_DEMO_SECONDARY_EMAIL"] not in {"", "aadityasoni2020@gmail.com"}:
-        errors.append("GMAIL_DEMO_SECONDARY_EMAIL: must be aadityasoni2020@gmail.com for this demo")
+    if values["GMAIL_DEMO_PRIMARY_EMAIL"] not in {"", "operator@example.com"}:
+        errors.append("GMAIL_DEMO_PRIMARY_EMAIL: must be operator@example.com for this demo")
+    if values["GMAIL_DEMO_SECONDARY_EMAIL"] not in {"", "requester@example.com"}:
+        errors.append("GMAIL_DEMO_SECONDARY_EMAIL: must be requester@example.com for this demo")
 
     token = values["GMAIL_DEMO_MCP_TOKEN"]
     if token and "CHANGE_ME" not in token.upper() and len(token) < 32:

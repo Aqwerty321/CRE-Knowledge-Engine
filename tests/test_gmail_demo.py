@@ -38,8 +38,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def _valid_demo_environment() -> dict[str, str]:
     return {
-        "GMAIL_DEMO_PRIMARY_EMAIL": "aaditya@toolhouse.ai",
-        "GMAIL_DEMO_SECONDARY_EMAIL": "aadityasoni2020@gmail.com",
+        "GMAIL_DEMO_PRIMARY_EMAIL": "operator@example.com",
+        "GMAIL_DEMO_SECONDARY_EMAIL": "requester@example.com",
         "GMAIL_DEMO_MCP_TOKEN": "0" * 48,
         "GMAIL_DEMO_PUBLIC_URL": "https://cre-demo.example.com",
         "GMAIL_DEMO_SECONDARY_APP_PASSWORD": "abcdefghijklmnop",
@@ -184,8 +184,8 @@ def test_toolhouse_prompt_is_hardcoded_and_covers_full_crud() -> None:
 def test_live_seed_templates_use_the_exact_demo_accounts_and_query_prefix() -> None:
     messages = load_email_templates()
 
-    assert DEFAULT_PRIMARY_EMAIL == "aaditya@toolhouse.ai"
-    assert DEFAULT_SECONDARY_EMAIL == "aadityasoni2020@gmail.com"
+    assert DEFAULT_PRIMARY_EMAIL == "operator@example.com"
+    assert DEFAULT_SECONDARY_EMAIL == "requester@example.com"
     assert len(messages) == 10
     assert all(message.subject.startswith("[CRE-DEMO]") for message in messages)
     assert [message.sequence for message in select_messages(messages, start_at=9, limit=2)] == [9, 10]
@@ -668,7 +668,7 @@ def test_acceptable_divisibility_language_does_not_downgrade_fit() -> None:
         "source_message_id": "msg-soft-divisibility",
         "source_thread_id": "thread-soft-divisibility",
         "source_subject": "[CRE-DEMO] Divisible office requirement",
-        "requester_email": "aadityasoni2020@gmail.com",
+        "requester_email": "requester@example.com",
         "size_min_sf": 10_000,
         "size_max_sf": 16_000,
         "city": "Austin",
@@ -774,7 +774,7 @@ def test_divisible_match_reply_renders_compatible_configuration() -> None:
         "source_thread_id": "thread-divisible",
         "source_subject": "[CRE-DEMO] Divisible office requirement",
         "requester_name": "Morgan",
-        "requester_email": "aadityasoni2020@gmail.com",
+        "requester_email": "requester@example.com",
         "size_min_sf": 10_000,
         "size_max_sf": 16_000,
         "city": "Austin",
@@ -817,7 +817,7 @@ def test_property_query_reply_uses_only_validated_sheet_evidence() -> None:
         source_message_id="msg-query",
         source_thread_id="thread-query",
         source_subject="[CRE-DEMO] QUERY Atlas Suite 100",
-        requester_email="aadityasoni2020@gmail.com",
+        requester_email="requester@example.com",
         results=search["results"],
         sender_name="Aaditya",
     )
@@ -844,7 +844,7 @@ def test_property_query_reply_rejects_reconstructed_or_unauthorized_evidence() -
         source_message_id="msg-query",
         source_thread_id="thread-query",
         source_subject="[CRE-DEMO] QUERY Atlas",
-        requester_email="aadityasoni2020@gmail.com",
+        requester_email="requester@example.com",
         results=tampered,
     )
     bad_recipient = compose_property_query_reply(
@@ -872,7 +872,7 @@ def test_property_query_exact_absent_identity_does_not_return_bm25_neighbors() -
         source_message_id="msg-moonbase",
         source_thread_id="thread-moonbase",
         source_subject="[CRE-DEMO] QUERY Moonbase Omega",
-        requester_email="aadityasoni2020@gmail.com",
+        requester_email="requester@example.com",
         results=search["results"],
         sender_name="Aaditya",
         exact_property_name="Moonbase Omega",
@@ -906,14 +906,14 @@ def test_compose_reply_authorizes_full_send_only_for_the_demo_sender() -> None:
     requirement = {
         **_requirement(),
         "source_subject": "[CRE-DEMO] 10-30K SF Electronics Lab Requirement",
-        "requester_email": "aadityasoni2020@gmail.com",
+        "requester_email": "requester@example.com",
     }
     result = compose_requirement_reply(requirement, match_result["matches"], sender_name="Aaditya")
 
     assert result["ok"] is True
     assert result["action"] == "send_reply"
-    assert result["from_account"] == "aaditya@toolhouse.ai"
-    assert result["to"] == "aadityasoni2020@gmail.com"
+    assert result["from_account"] == "operator@example.com"
+    assert result["to"] == "requester@example.com"
     assert result["thread_id"] == "thread-1"
     assert "Atlas Flex Campus" in result["body_text"]
     assert "Generic Flex Building" in result["body_text"]
