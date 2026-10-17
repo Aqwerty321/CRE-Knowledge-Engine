@@ -969,7 +969,7 @@ For the live Slack environment used here:
 - Embeddings: `qwen3-embedding-0_6b-q8_0`
 - Rerank: `qwen3-reranker-0.6b`
 - OCR: GLM-OCR at `http://127.0.0.1:5003`
-- Toolhouse Agent ID: your own agent, set through `TOOLHOUSE_AGENT_ID`
+- Toolhouse Agent ID: your own agent, set through `CRE_TOOLHOUSE_AGENT_ID`
 
 Existing local Postgres containers created from the old non-PostGIS image keep working through numeric coordinate fallback. To activate the `geo_point` column in an already-initialized local database, recreate the compose Postgres service with the PostGIS image and run the latest Alembic migrations. [scripts/recover-demo-stack.sh](scripts/recover-demo-stack.sh) now applies migrations after Postgres is healthy.
 
